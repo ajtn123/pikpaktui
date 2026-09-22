@@ -417,11 +417,12 @@ impl App {
                 match code {
                     KeyCode::Enter | KeyCode::Char('y') => {
                         if let Some(player) = self.config.player.clone() {
-                            self.spawn_player(&player, &url);
+                            self.spawn_player(&player, &url, &name);
                         } else {
                             self.input = InputMode::PlayerInput {
                                 value: String::new(),
                                 pending_url: url,
+                                pending_name: name,
                             };
                         }
                     }
@@ -473,11 +474,12 @@ impl App {
                             if opt.available {
                                 let url = opt.url.clone();
                                 if let Some(player) = self.config.player.clone() {
-                                    self.spawn_player(&player, &url);
+                                    self.spawn_player(&player, &url, &name);
                                 } else {
                                     self.input = InputMode::PlayerInput {
                                         value: String::new(),
                                         pending_url: url,
+                                        pending_name: name,
                                     };
                                 }
                             } else {
@@ -504,6 +506,7 @@ impl App {
             InputMode::PlayerInput {
                 mut value,
                 pending_url,
+                pending_name,
             } => {
                 match handle_text_input(&mut value, &mut self.text_cursor, code, modifiers) {
                     Some(false) => {}
@@ -511,15 +514,23 @@ impl App {
                         let cmd = value.trim().to_string();
                         if !cmd.is_empty() {
                             self.push_log(format!("Player set to: {}", cmd));
-                            self.spawn_player(&cmd, &pending_url);
+                            self.spawn_player(&cmd, &pending_url, &pending_name);
                             self.config.player = Some(cmd);
                             let _ = self.config.save();
                         } else {
-                            self.input = InputMode::PlayerInput { value, pending_url };
+                            self.input = InputMode::PlayerInput {
+                                value,
+                                pending_url,
+                                pending_name,
+                            };
                         }
                     }
                     None => {
-                        self.input = InputMode::PlayerInput { value, pending_url };
+                        self.input = InputMode::PlayerInput {
+                            value,
+                            pending_url,
+                            pending_name,
+                        };
                     }
                 }
                 Ok(false)
@@ -2065,7 +2076,7 @@ impl App {
 
     fn start_cart_download(&mut self, dest_dir: &str) {
         let dest = PathBuf::from(dest_dir);
-        let cart_items: Vec<Entry> = self.cart.drain(..).collect();
+        let cart_items = std::mem::take(&mut self.cart);
         self.cart_ids.clear();
         self.cart_selected = 0;
 
@@ -2673,24 +2684,38 @@ impl App {
         });
     }
 
-    fn spawn_player(&mut self, cmd: &str, url: &str) {
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        if parts.is_empty() {
-            self.push_log("Player command is empty".into());
-            return;
-        }
-        let program = parts[0];
-        let mut args: Vec<&str> = parts[1..].to_vec();
-        args.push("--");
-        args.push(url);
-        match std::process::Command::new(program).args(&args).spawn() {
-            Ok(_) => {
-                self.push_log(format!("Launched {} with video URL", program));
+    fn spawn_player(&mut self, cmd: &str, url: &str, name: &str) {
+        let client = Arc::clone(&self.client);
+        let tx = self.result_tx.clone();
+        let parent_id = self.current_folder_id.clone();
+        let (cmd, url, name) = (cmd.to_owned(), url.to_owned(), name.to_owned());
+        // Subtitle API calls and the player's lifetime must not block the UI.
+        std::thread::spawn(move || {
+            let result = crate::playback::prepare_player(&client, &cmd, &parent_id, &name, &url)
+                .and_then(|mut command| command.spawn().map_err(anyhow::Error::from));
+            match result {
+                Ok(mut child) => {
+                    let _ = tx.send(OpResult::PlayerLog(format!(
+                        "Launched {cmd} with video URL"
+                    )));
+                    match child.wait() {
+                        Ok(status) if !status.success() => {
+                            let _ = tx
+                                .send(OpResult::PlayerLog(format!("Player exited with {status}")));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(OpResult::PlayerLog(format!("Player error: {e}")));
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(OpResult::PlayerLog(format!(
+                        "Failed to launch {cmd}: {e:#}"
+                    )));
+                }
             }
-            Err(e) => {
-                self.push_log(format!("Failed to launch {}: {}", program, e));
-            }
-        }
+        });
     }
 
     pub(super) fn spawn_delete(&mut self, entry: Entry) {

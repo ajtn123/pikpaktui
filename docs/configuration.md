@@ -62,6 +62,65 @@ download_jobs = 1           # TUI download workers (1–16 in the settings UI)
 update_check = "notify"     # "notify" | "quiet" | "off"
 ```
 
+### Playback title and subtitles
+
+The `player` command supports argument templates, so you can use your player's own
+option names. For mpv, set this top-level key in `config.toml`:
+
+```toml
+player = "mpv --fullscreen --title={title} --sub-file={subtitle}"
+```
+
+Templates apply to CLI playback and both TUI playback modes (Enter and `w`).
+
+| Placeholder | Expansion |
+|-------------|-----------|
+| `{title}` | Video filename without its final extension, e.g. `VideoX` for `VideoX.mkv` |
+| `{url}` | The selected video stream URL, at this position in the command |
+| `{subtitle}` | One matching subtitle URL; the **entire argument** repeats for every match and is omitted when there are no matches |
+
+For example, `--sub-file={subtitle}` becomes two separate `--sub-file=URL`
+arguments when two subtitles match. Use your player's repeatable option with `=`;
+`--sub-file {subtitle}` would only repeat the URL, not the preceding option.
+A standalone `{subtitle}` passes each URL as a separate positional argument for
+players or wrappers that accept separate file arguments.
+
+Without `{url}`, pikpaktui appends `--` and the video URL, preserving plain commands
+such as `player = "mpv"`. If the last argument is already `--`, it is not duplicated.
+With `{url}`, the template controls the argument order and separators completely:
+
+```toml
+player = "mpv --title={title} --sub-file={subtitle} -- {url}"
+```
+
+Subtitles are files in the same cloud
+folder named `VideoX.ass`, `VideoX.Y.srt`, etc. Supported extensions are `.srt`,
+`.ass`, `.ssa`, and `.vtt` (case-insensitive); filename stems match exactly.
+Subtitle files are looked up only when the template contains a subtitle placeholder.
+No local subtitle download is required. A failed lookup reports an error instead
+of starting incomplete playback.
+
+Commands use shell-style single/double quotes and backslash escaping to group
+arguments, but run directly **without a shell**. Variables, pipes, redirects, and
+command substitutions are not evaluated. Arguments are parsed before placeholders
+are expanded, so spaces, quotes, and metacharacters in titles or URLs remain data
+inside a single argument. Substituted values are never expanded again.
+
+Quote executable paths containing spaces. On Windows, forward slashes avoid
+backslash escaping; a TOML literal string makes nested quotes easy:
+
+```toml
+player = '"C:/Program Files/mpv/mpv.exe" --title={title} --sub-file={subtitle}'
+```
+
+Use `{{` and `}}` for literal braces (e.g. `--title=${{media-title}}` to pass mpv's
+own property expression). Unknown placeholders and malformed quotes produce an
+error. Placeholders are allowed only in arguments, not in the executable name.
+
+The mpv example uses its [`--title`](https://mpv.io/manual/master/#options-title)
+and [`--sub-file`](https://mpv.io/manual/master/#options-sub-file) options; other
+players can use different flags with the same placeholders.
+
 ### update_check
 
 Controls update checking behavior.

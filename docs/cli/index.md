@@ -5,7 +5,7 @@ order: 1
 ---
 
 
-pikpaktui provides 28 CLI subcommands for scripting, automation, and power-user workflows. All commands require a valid session — run `pikpaktui` (TUI) first to log in, or use `pikpaktui login`.
+pikpaktui provides 29 CLI subcommands for scripting, automation, and power-user workflows. Cloud commands require a valid session — run `pikpaktui` (TUI) first to log in, or use `pikpaktui login`. The local `hash` command works offline without a session.
 
 ## Command Groups
 
@@ -35,6 +35,7 @@ pikpaktui provides 28 CLI subcommands for scripting, automation, and power-user 
 |---------|-------------|
 | [`download`](/cli/commands#download) | Download files or folders |
 | [`upload`](/cli/commands#upload) | Upload files to PikPak |
+| [`hash`](/cli/commands#hash) | Compute a local file's PikPak hash |
 | [`share`](/cli/commands#share) | Create, browse, list, save, or delete share links |
 
 ### Cloud Download

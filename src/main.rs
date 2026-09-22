@@ -1,6 +1,7 @@
 mod cmd;
 mod config;
 mod pikpak;
+mod playback;
 mod theme;
 mod tui;
 
@@ -51,6 +52,7 @@ fn entry() -> Result<()> {
         "mkdir" => cmd::mkdir::run(&args[1..]),
         "download" => cmd::download::run(&args[1..]),
         "upload" => cmd::upload::run(&args[1..]),
+        "hash" => cmd::hash::run(&args[1..]),
         "share" => cmd::share::run(&args[1..]),
         "quota" => cmd::quota::run(&args[1..]),
         "offline" => cmd::offline::run(&args[1..]),
@@ -93,7 +95,7 @@ fn entry() -> Result<()> {
 fn cli_update_check(args: &[String]) -> Option<mpsc::Receiver<Option<String>>> {
     let skip = matches!(
         args.first().map(|s| s.as_str()),
-        Some("update" | "completions" | "__complete_path")
+        Some("hash" | "update" | "completions" | "__complete_path")
     );
     if skip {
         return None;

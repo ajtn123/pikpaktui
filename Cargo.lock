@@ -2063,6 +2063,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "shlex",
  "syntect",
  "toml",
  "unicode-width",

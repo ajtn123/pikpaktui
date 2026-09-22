@@ -5,7 +5,7 @@ order: 2
 ---
 
 
-All commands require a valid session. Run `pikpaktui` (TUI) to log in first, or use [`login`](#login).
+Cloud commands require a valid session. Run `pikpaktui` (TUI) to log in first, or use [`login`](#login). The local [`hash`](#hash) command works offline without a session.
 
 ---
 
@@ -263,6 +263,28 @@ Set your player in `config.toml` (`player = "mpv"`) or via the TUI Settings pane
 :::
 
 ---
+
+To pass the video title and matching cloud subtitles to mpv, set
+`player = "mpv --title={title} --sub-file={subtitle}"` in `config.toml`.
+Use your player's own option names; `{url}` can specify the stream URL's position. See
+[playback configuration](/configuration#playback-title-and-subtitles).
+
+## hash
+
+Compute a local file's PikPak hash to compare with the cloud file's `hash` field
+(`pikpaktui info --json <cloud_path>`) or the `g` parameter in its download URL.
+This uses the same algorithm as uploads and requires no login or network access.
+
+```bash
+pikpaktui hash ./movie.mkv
+pikpaktui hash --json "./movie with spaces.mkv"
+pikpaktui hash -- -filename.mkv
+```
+
+Plain output is the uppercase hash alone. `-J` / `--json` outputs an object with
+`path` and `pikpak_hash` fields. Missing files, directories, and unreadable files
+produce an error and a nonzero exit status. A matching hash verifies the download
+matches the cloud copy; it does not establish whether that copy was already corrupt.
 
 ## download
 

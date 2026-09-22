@@ -73,6 +73,7 @@ _pikpaktui() {
         'mkdir:Create folder (-p recursive)'
         'download:Download a file (-o output path)'
         'upload:Upload file(s) (-t for batch)'
+        'hash:Compute the PikPak hash of a local file'
         'share:Share file(s) as PikPak links'
         'offline:Cloud download a URL or magnet link'
         'tasks:Manage offline download tasks'
@@ -104,6 +105,13 @@ _pikpaktui() {
 
     local cmd="${words[2]}"
     case "$cmd" in
+        hash)
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -- '-J' '--json' '--'
+            else
+                _files
+            fi
+            ;;
         ls)
             if [[ "${words[CURRENT]}" == -* ]]; then
                 compadd -- '-l' '--long' '-J' '--json' '-s' '--sort' '-r' '--reverse' '--tree' '--depth'
@@ -317,7 +325,7 @@ _pikpaktui() {
     local cmd="${COMP_WORDS[1]}"
     COMPREPLY=()
 
-    local commands="ls mv cp rename rm mkdir download upload share offline tasks \
+    local commands="ls mv cp rename rm mkdir download upload hash share offline tasks \
 star unstar starred events trash untrash empty info link cat play quota vip \
 whoami login update completions help version"
 
@@ -327,6 +335,13 @@ whoami login update completions help version"
     fi
 
     case "$cmd" in
+        hash)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "-J --json --" -- "$cur"))
+            else
+                _pikpaktui_local_path
+            fi
+            ;;
         ls)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=($(compgen -W "-l --long -J --json -s --sort -r --reverse --tree --depth" -- "$cur"))
@@ -512,11 +527,14 @@ end
 complete -c pikpaktui -f
 
 # Top-level commands
-set -l subcommands ls mv cp rename rm mkdir download upload share offline tasks \
+set -l subcommands ls mv cp rename rm mkdir download upload hash share offline tasks \
     star unstar starred events trash untrash empty info link cat play quota vip \
     whoami login update completions help version
 
 complete -c pikpaktui -n "not __fish_seen_subcommand_from $subcommands" -a ls         -d "List files"
+complete -c pikpaktui -n "not __fish_seen_subcommand_from $subcommands" -a hash       -d "Compute local PikPak hash"
+complete -c pikpaktui -n "__pikpaktui_using_command hash" -F
+complete -c pikpaktui -n "__pikpaktui_using_command hash" -s J -l json -d "JSON output"
 complete -c pikpaktui -n "not __fish_seen_subcommand_from $subcommands" -a mv         -d "Move files"
 complete -c pikpaktui -n "not __fish_seen_subcommand_from $subcommands" -a cp         -d "Copy files"
 complete -c pikpaktui -n "not __fish_seen_subcommand_from $subcommands" -a rename     -d "Rename file"
@@ -691,7 +709,7 @@ Register-ArgumentCompleter -Native -CommandName @('pikpaktui') -ScriptBlock {
     $allCommands = @(
         'ls','mv','cp','rename','rm','mkdir','download','upload','share',
         'offline','tasks','star','unstar','starred','events','trash','untrash',
-        'empty','info','link','cat','play','quota','vip','whoami','login',
+        'empty','info','link','cat','play','quota','vip','whoami','login','hash',
         'update','completions','help','version'
     )
 
@@ -704,6 +722,15 @@ Register-ArgumentCompleter -Native -CommandName @('pikpaktui') -ScriptBlock {
     }
 
     switch ($command) {
+        "hash" {
+            if ($wordToComplete.StartsWith('-')) {
+                @('-J','--json','--') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                    [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+                }
+            } else {
+                Get-LocalPaths $wordToComplete
+            }
+        }
         "completions" {
             @('bash','zsh','fish','powershell') |
                 Where-Object { $_ -like "$wordToComplete*" } |

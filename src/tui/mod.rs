@@ -258,6 +258,8 @@ enum OpResult {
     Ls(u64, String, Result<Vec<Entry>>),
     Ok(String),
     Err(String),
+    /// Player notifications do not complete or refresh unrelated UI operations.
+    PlayerLog(String),
     Info(AsyncRequest, Result<FileInfoResponse>, Option<String>),
     ParentLs(AsyncRequest, Result<Vec<Entry>>),
     PreviewLs(AsyncRequest, Result<Vec<Entry>>),
@@ -405,6 +407,7 @@ enum InputMode {
     PlayerInput {
         value: String,
         pending_url: String,
+        pending_name: String,
     },
     TrashView {
         entries: Vec<Entry>,
@@ -813,6 +816,7 @@ impl App {
                     self.push_log(msg);
                     self.finish_loading();
                 }
+                OpResult::PlayerLog(msg) => self.push_log(msg),
                 OpResult::Info(request, Ok(info), thumb_fallback) => {
                     if !self.modal_request_matches(&request)
                         || !matches!(self.input, InputMode::InfoLoading)
@@ -1829,6 +1833,35 @@ mod folder_listing_result_tests {
 
     fn test_app() -> App {
         App::new_login(PikPak::new().unwrap(), None, TuiConfig::default())
+    }
+
+    #[test]
+    fn player_notifications_leave_pending_navigation_alone() {
+        let mut app = test_app();
+        app.loading = true;
+        app.current_folder_id = "new-folder".into();
+        app.result_tx
+            .send(OpResult::PlayerLog("Launched mpv".into()))
+            .unwrap();
+        app.poll_results();
+        assert!(app.loading);
+        assert_eq!(app.current_folder_id, "new-folder");
+    }
+
+    #[test]
+    fn player_prompt_preserves_video_name_for_metadata() {
+        let mut app = test_app();
+        app.input = InputMode::ConfirmPlay {
+            name: "VideoX.mkv".into(),
+            url: "https://example/video".into(),
+        };
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('m'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(
+            matches!(&app.input, InputMode::PlayerInput { pending_name, pending_url, value }
+            if pending_name == "VideoX.mkv" && pending_url == "https://example/video" && value == "m")
+        );
     }
 
     fn info(id: &str, name: &str) -> FileInfoResponse {

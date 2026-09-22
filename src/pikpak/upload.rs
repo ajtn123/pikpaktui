@@ -382,6 +382,9 @@ pub fn pikpak_hash(path: &Path) -> Result<String> {
     use sha1::Digest;
 
     let meta = fs::metadata(path).with_context(|| format!("cannot stat '{}'", path.display()))?;
+    if !meta.is_file() {
+        return Err(anyhow!("not a regular file: '{}'", path.display()));
+    }
     let file_size = meta.len();
 
     let chunk_size: u64 = if file_size < 128 * 1024 * 1024 {
@@ -602,6 +605,35 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn pikpak_hash_known_vectors_and_chunk_boundary() {
+        let root = temp_dir("hash-vectors");
+        let path = root.join("local file.bin");
+        for (contents, expected) in [
+            (vec![], "4026E982E356B8AFF02CAA2601C6BCB17FB5C645"),
+            (b"abc".to_vec(), "DC99ED0C65114FB7A4EDEC7EC60659B4D76F995E"),
+            (
+                vec![b'a'; 256 * 1024],
+                "647954E095570DED67E391B30B6B3F93B49AF9C5",
+            ),
+            (
+                vec![b'a'; 256 * 1024 + 1],
+                "1B5DDB7AB3D825462B697D447312B22DE1FA5862",
+            ),
+        ] {
+            fs::write(&path, contents).unwrap();
+            assert_eq!(pikpak_hash(&path).unwrap(), expected);
+        }
+        assert!(
+            pikpak_hash(&root)
+                .unwrap_err()
+                .to_string()
+                .contains("not a regular file")
+        );
+        assert!(pikpak_hash(&root.join("missing")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn upload_test_client(base_url: String, session_path: &Path) -> PikPak {

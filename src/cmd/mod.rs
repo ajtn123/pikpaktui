@@ -5,6 +5,7 @@ pub mod cp;
 pub mod download;
 pub mod empty;
 pub mod events;
+pub mod hash;
 pub mod help;
 pub mod info;
 pub mod link;
@@ -48,7 +49,7 @@ pub const COMMAND_GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Playback", &["play"]),
-    ("Transfer", &["download", "upload", "share"]),
+    ("Transfer", &["download", "upload", "hash", "share"]),
     ("Cloud Download", &["offline", "tasks"]),
     ("Trash", &["trash", "untrash", "empty"]),
     (
@@ -60,9 +61,11 @@ pub const COMMAND_GROUPS: &[(&str, &[&str])] = &[
     ("Utility", &["update", "completions"]),
 ];
 
-/// Returns true if the arg slice contains `-h` or `--help`.
+/// Returns true if `-h` or `--help` occurs before the `--` argument separator.
 pub fn wants_help(args: &[String]) -> bool {
-    args.iter().any(|a| a == "-h" || a == "--help")
+    args.iter()
+        .take_while(|a| a.as_str() != "--")
+        .any(|a| a == "-h" || a == "--help")
 }
 
 /// Print per-command help. Returns `Ok(())` so it can be used as an early return.
@@ -315,12 +318,27 @@ pub fn command_help_text(cmd: &str) -> (&'static str, &'static str, String) {
                 ex = D,
             ),
         ),
+        "hash" => (
+            "hash [-J|--json] [--] <local_path>",
+            "Compute the PikPak hash of a local file",
+            format!(
+                "Compute the same hash used for upload deduplication, without login or network access.\n\
+                 Compare with the cloud file hash or the download URL's g parameter.\n\
+                 \n{B}OPTIONS:{R}\n\
+                 {G}  -J, --json       {D}Output path and pikpak_hash as JSON{R}\n\
+                 \n{B}EXAMPLES:{R}\n\
+                 {D}  pikpaktui hash ./movie.mkv{R}\n\
+                 {D}  pikpaktui hash --json ./movie.mkv{R}\n"
+            ),
+        ),
         "play" => (
             "play <path> [quality]",
             "Play video with external player",
             format!(
                 "{B}ARGUMENTS:{R}\n\
                  {opt}  quality          {d}Stream quality (e.g. 720, 1080, original){R}\n\
+                 \nPlayer templates: {{title}}, {{url}}, and {{subtitle}} (repeated per file).\n\
+                 {ex}  player = \"mpv --title={{title}} --sub-file={{subtitle}}\"{R}\n\
                  \n{B}EXAMPLES:{R}\n\
                  {ex}  pikpaktui play /movie.mkv{R}\n\
                  {ex}  pikpaktui play /movie.mkv 1080{R}\n",

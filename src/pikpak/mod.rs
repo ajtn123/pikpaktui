@@ -10,6 +10,8 @@ mod responses;
 mod share;
 mod upload;
 
+pub use upload::pikpak_hash;
+
 use auth::{CaptchaInitResponse, SigninResponse};
 #[cfg(test)]
 pub(crate) use download::part_path;
@@ -1290,6 +1292,89 @@ mod tests {
             }
         });
         (base_url, requested_tokens, handle)
+    }
+
+    #[test]
+    fn playback_resolves_matching_subtitles_across_listing_pages() {
+        let root = temp_test_dir("playback-subtitles");
+        let (base_url, requests, handle) = start_paginated_get_server(vec![
+            r#"{"files":[{"id":"sub2","name":"VideoX.Y.srt"},{"id":"other","name":"VideoXY.srt"}],"next_page_token":"next"}"#,
+            r#"{"files":[{"id":"sub1","name":"VideoX.ass"},{"id":"folder","name":"VideoX.srt","kind":"drive#folder"}]}"#,
+            r#"{"name":"VideoX.Y.srt","web_content_link":"https://example/sub2.srt?a=1&b=2"}"#,
+            r#"{"name":"VideoX.ass","links":{"application/octet-stream":{"url":"https://example/sub1.ass"}}}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+        let command = crate::playback::prepare_player(
+            &client,
+            "mpv --fullscreen --title={title} --sub-file={subtitle}",
+            "movies",
+            "VideoX.mkv",
+            "https://example/video",
+        )
+        .unwrap();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--fullscreen",
+                "--title=VideoX",
+                "--sub-file=https://example/sub2.srt?a=1&b=2",
+                "--sub-file=https://example/sub1.ass",
+                "--",
+                "https://example/video"
+            ]
+        );
+        handle.join().unwrap();
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![None, Some("next".into()), None, None]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn playback_without_subtitles_does_not_require_session_or_network() {
+        let root = temp_test_dir("playback-offline");
+        let client = test_client("http://127.0.0.1:1".into(), root.join("session.json"));
+        std::fs::remove_file(root.join("session.json")).unwrap();
+        let command = crate::playback::prepare_player(
+            &client,
+            "mpv --title={title}",
+            "movies",
+            "VideoX.mkv",
+            "https://example/video",
+        )
+        .unwrap();
+        assert_eq!(command.get_args().next().unwrap(), "--title=VideoX");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn playback_reports_subtitle_without_a_download_url() {
+        let root = temp_test_dir("playback-missing-link");
+        let (base_url, _, handle) = start_paginated_get_server(vec![
+            r#"{"files":[{"id":"sub","name":"VideoX.srt"}]}"#,
+            r#"{"name":"VideoX.srt","web_content_link":""}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+        let error = crate::playback::prepare_player(
+            &client,
+            "mpv --sub-file={subtitle}",
+            "movies",
+            "VideoX.mkv",
+            "https://example/video",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no download URL for subtitle 'VideoX.srt'")
+        );
+        handle.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn start_captcha_refresh_server()

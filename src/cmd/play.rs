@@ -68,10 +68,10 @@ pub fn run(args: &[String]) -> Result<()> {
     let quality = args.get(1).map(|s| s.as_str());
 
     let config = super::cli_config();
-    let player = config.player.ok_or_else(|| {
+    let player = config.player.as_deref().ok_or_else(|| {
         anyhow!(
             "no player configured.\n\
-             Set `player` in ~/.config/pikpaktui/config.toml under [tui], e.g.:\n\n  \
+             Set the top-level `player` in ~/.config/pikpaktui/config.toml, e.g.:\n\n  \
              player = \"mpv\""
         )
     })?;
@@ -81,6 +81,20 @@ pub fn run(args: &[String]) -> Result<()> {
     let (parent_path, name) = super::split_parent_name(path)?;
     let parent_id = client.resolve_path(&parent_path)?;
     let entry = super::find_entry(&client, &parent_id, &name)?;
+
+    let launch = |opt: &PlayOption| -> Result<()> {
+        let mut command =
+            crate::playback::prepare_player(&client, player, &parent_id, &entry.name, &opt.url)?;
+        eprintln!("Playing '{}' with {}...", opt.label, player);
+        let mut child = command
+            .spawn()
+            .map_err(|e| anyhow!("failed to launch {player}: {e}"))?;
+        let status = child.wait().map_err(|e| anyhow!("player error: {e}"))?;
+        if !status.success() {
+            return Err(anyhow!("player exited with {status}"));
+        }
+        Ok(())
+    };
 
     let options = build_play_options(&client, &entry.id)?;
     if options.is_empty() {
@@ -108,7 +122,7 @@ pub fn run(args: &[String]) -> Result<()> {
                             opt.label
                         ));
                     }
-                    return launch_player(&player, &opt.url, &opt.label);
+                    return launch(opt);
                 }
                 return Err(anyhow!(
                     "invalid stream number: {}. Available: 1-{}",
@@ -140,7 +154,7 @@ pub fn run(args: &[String]) -> Result<()> {
                             opt.label
                         ));
                     }
-                    launch_player(&player, &opt.url, &opt.label)
+                    launch(opt)
                 }
                 _ => {
                     let names: Vec<&str> = matched.iter().map(|o| o.label.as_str()).collect();
@@ -153,24 +167,4 @@ pub fn run(args: &[String]) -> Result<()> {
             }
         }
     }
-}
-
-fn launch_player(player_cmd: &str, url: &str, label: &str) -> Result<()> {
-    let parts: Vec<&str> = player_cmd.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err(anyhow!("player command is empty"));
-    }
-    let program = parts[0];
-    let mut args: Vec<&str> = parts[1..].to_vec();
-    args.push("--");
-    args.push(url);
-
-    eprintln!("Playing '{}' with {}...", label, program);
-    let mut child = std::process::Command::new(program)
-        .args(&args)
-        .spawn()
-        .map_err(|e| anyhow!("failed to launch {}: {}", program, e))?;
-
-    child.wait().map_err(|e| anyhow!("player error: {}", e))?;
-    Ok(())
 }
