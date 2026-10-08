@@ -4,6 +4,81 @@ use super::drive::{DriveFileResponse, DriveListResponse};
 use super::{Entry, FileInfoResponse, PikPak, ensure_success, json_or_api_error};
 
 impl PikPak {
+    /// Find the newest added video on the first page of the activity log used
+    /// by `events`, preserving its parent folder for matching subtitles.
+    pub fn recent_video(&self) -> Result<Option<(Entry, String)>> {
+        let page = self.events(100)?;
+        let mut deleted_ids = std::collections::HashSet::new();
+
+        // Events arrive newest first. A later deletion must also exclude
+        // older creation records for that file on this page.
+        for event in page.events {
+            let id = event.file_id.filter(|id| !id.is_empty()).or_else(|| {
+                event
+                    .reference_resource
+                    .as_ref()?
+                    .id
+                    .clone()
+                    .filter(|id| !id.is_empty())
+            });
+            let Some(id) = id else { continue };
+            let event_type = event.event_type.as_deref().unwrap_or("");
+            if event_type == "TYPE_DELETE"
+                || event
+                    .reference_resource
+                    .as_ref()
+                    .is_some_and(|resource| resource.trashed == Some(true))
+            {
+                deleted_ids.insert(id);
+                continue;
+            }
+            if deleted_ids.contains(&id)
+                || !matches!(event_type, "TYPE_CREATE" | "TYPE_UPLOAD" | "TYPE_RESTORE")
+            {
+                continue;
+            }
+            let Some(resource) = event.reference_resource else {
+                continue;
+            };
+            let is_video = resource
+                .mime_type
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("video/"))
+                || resource
+                    .file_category
+                    .as_deref()
+                    .is_some_and(|category| category.eq_ignore_ascii_case("VIDEO"));
+            if !is_video
+                || resource
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| kind.contains("folder"))
+            {
+                continue;
+            }
+            let Some(name) = resource
+                .name
+                .filter(|name| !name.is_empty())
+                .or(event.file_name.filter(|name| !name.is_empty()))
+            else {
+                continue;
+            };
+            let entry = Entry {
+                id,
+                name,
+                kind: super::EntryKind::File,
+                size: 0,
+                created_time: event.created_time.unwrap_or_default(),
+                modified_time: String::new(),
+                starred: false,
+                thumbnail_link: None,
+            };
+            return Ok(Some((entry, resource.parent_id.unwrap_or_default())));
+        }
+
+        Ok(None)
+    }
+
     pub fn ls(&self, parent_id: &str) -> Result<Vec<Entry>> {
         let token = self.access_token()?;
         let url = self.drive_url("drive/v1/files");

@@ -231,23 +231,32 @@ pikpaktui cat "/My Pack/notes.txt"
 
 ## play
 
-以外部播放器播放影片串流。不指定畫質則列出可用選項。
+以外部播放器播放影片串流。預設播放原始檔案。
 
 ```
-pikpaktui play <路徑> [畫質]
+pikpaktui play [選項] <路徑>
+pikpaktui play [選項] --recent
 ```
 
-| 參數 | 說明 |
+| 選項 | 說明 |
 |------|------|
-| `畫質` | 串流畫質：`720`、`1080`、`original`，或按編號選擇 |
+| `-r`, `--recent` | 選擇最近活動首頁中最新新增的影片；不能與路徑同時使用 |
+| `-q`, `--quality <畫質>` | 串流名稱，如 `720p`、`1080p`、`original`，或串流編號；預設為 `original` |
+| `-l`, `--list-stream` | 列出可用串流，不啟動播放器 |
+
+選項可放在路徑前後。同時指定 `--list-stream` 和 `--quality` 時，只列出串流，不播放。
+
+`--recent` 重用 `events` 查詢，只檢查第一頁（最多 100 筆記錄）。如果該頁沒有新增的影片，會提示並停止。
 
 **範例：**
 
 ```bash
-pikpaktui play "/My Pack/video.mp4"            # 列出可用串流
-pikpaktui play "/My Pack/video.mp4" 1080       # 播放 1080p
-pikpaktui play "/My Pack/video.mp4" original   # 播放原始檔案
-pikpaktui play "/My Pack/video.mp4" 2          # 按編號播放第 2 條串流
+pikpaktui play "/My Pack/video.mp4"           # 播放原始檔案
+pikpaktui play "/My Pack/video.mp4" -q 1080p  # 播放 1080p
+pikpaktui play "/My Pack/video.mp4" -q 2      # 按編號播放第 2 條串流
+pikpaktui play -l "/My Pack/video.mp4"        # 列出可用串流
+pikpaktui play -r                             # 播放最近新增的影片
+pikpaktui play --recent --list-stream         # 列出該影片的可用串流
 ```
 
 ---

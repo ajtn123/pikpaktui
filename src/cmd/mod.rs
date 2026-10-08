@@ -332,16 +332,23 @@ pub fn command_help_text(cmd: &str) -> (&'static str, &'static str, String) {
             ),
         ),
         "play" => (
-            "play <path> [quality]",
+            "play [options] [path]",
             "Play video with external player",
             format!(
-                "{B}ARGUMENTS:{R}\n\
-                 {opt}  quality          {d}Stream quality (e.g. 720, 1080, original){R}\n\
+                "{B}OPTIONS:{R}\n\
+                 {opt}  -r, --recent          {d}Play the newest added video on the first events page{R}\n\
+                 {opt}  -q, --quality <value> {d}Stream name or index (default: original){R}\n\
+                 {opt}  -l, --list-stream     {d}List streams without starting playback{R}\n\
+                 \nProvide a path or --recent, but not both. Options may precede or follow the path.\n\
+                 --recent checks up to 100 events and stops if that page has no video.\n\
+                 --list-stream takes precedence over --quality.\n\
                  \nPlayer templates: {{title}}, {{url}}, and {{subtitle}} (repeated per file).\n\
                  {ex}  player = \"mpv --title={{title}} --sub-file={{subtitle}}\"{R}\n\
                  \n{B}EXAMPLES:{R}\n\
                  {ex}  pikpaktui play /movie.mkv{R}\n\
-                 {ex}  pikpaktui play /movie.mkv 1080{R}\n",
+                 {ex}  pikpaktui play /movie.mkv -q 1080p{R}\n\
+                 {ex}  pikpaktui play /movie.mkv -l{R}\n\
+                 {ex}  pikpaktui play -r{R}\n",
                 opt = G,
                 d = D,
                 ex = D,

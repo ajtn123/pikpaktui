@@ -233,23 +233,32 @@ pikpaktui cat "/My Pack/notes.txt"
 
 ## play
 
-用外部播放器播放视频流。不指定画质则列出可用选项。
+用外部播放器播放视频流。默认播放原始文件。
 
 ```
-pikpaktui play <路径> [画质]
+pikpaktui play [选项] <路径>
+pikpaktui play [选项] --recent
 ```
 
-| 参数 | 说明 |
+| 选项 | 说明 |
 |------|------|
-| `画质` | 流画质：`720`、`1080`、`original`，或按编号选择 |
+| `-r`, `--recent` | 选择最近活动首页中最新添加的视频；不能与路径同时使用 |
+| `-q`, `--quality <画质>` | 流名称，如 `720p`、`1080p`、`original`，或流编号；默认为 `original` |
+| `-l`, `--list-stream` | 列出可用流，不启动播放器 |
+
+选项可放在路径前后。同时指定 `--list-stream` 和 `--quality` 时，只列出流，不播放。
+
+`--recent` 复用 `events` 查询，只检查第一页（最多 100 条记录）。如果该页没有添加的视频，会提示并停止。
 
 **示例：**
 
 ```bash
-pikpaktui play "/My Pack/video.mp4"            # 列出可用流
-pikpaktui play "/My Pack/video.mp4" 1080       # 播放 1080p
-pikpaktui play "/My Pack/video.mp4" original   # 播放原始文件
-pikpaktui play "/My Pack/video.mp4" 2          # 按编号播放第 2 条流
+pikpaktui play "/My Pack/video.mp4"           # 播放原始文件
+pikpaktui play "/My Pack/video.mp4" -q 1080p  # 播放 1080p
+pikpaktui play "/My Pack/video.mp4" -q 2      # 按编号播放第 2 条流
+pikpaktui play -l "/My Pack/video.mp4"        # 列出可用流
+pikpaktui play -r                             # 播放最近添加的视频
+pikpaktui play --recent --list-stream         # 列出该视频的可用流
 ```
 
 :::callout[播放器配置]{kind="info"}

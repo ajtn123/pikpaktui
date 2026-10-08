@@ -227,8 +227,17 @@ _pikpaktui() {
                 _pikpaktui_cloud_path
             fi
             ;;
-        cat|play)
+        cat)
             _pikpaktui_cloud_path
+            ;;
+        play)
+            if [[ "${words[CURRENT-1]}" == "-q" ]] || [[ "${words[CURRENT-1]}" == "--quality" ]]; then
+                compadd -- 'original' '720p' '1080p'
+            elif [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -- '-r' '--recent' '-q' '--quality' '-l' '--list-stream'
+            else
+                _pikpaktui_cloud_path
+            fi
             ;;
         starred|trash)
             [[ "${words[CURRENT]}" == -* ]] && compadd -- '-l' '--long' '-J' '--json'
@@ -443,8 +452,17 @@ whoami login update completions help version"
                 _pikpaktui_cloud_path
             fi
             ;;
-        cat|play)
+        cat)
             _pikpaktui_cloud_path
+            ;;
+        play)
+            if [[ "$prev" == "-q" ]] || [[ "$prev" == "--quality" ]]; then
+                COMPREPLY=($(compgen -W "original 720p 1080p" -- "$cur"))
+            elif [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "-r --recent -q --quality -l --list-stream" -- "$cur"))
+            else
+                _pikpaktui_cloud_path
+            fi
             ;;
         starred|trash)
             if [[ "$cur" == -* ]]; then
@@ -570,7 +588,8 @@ complete -c pikpaktui -n "__pikpaktui_using_command completions" -a "bash zsh fi
 
 # Context-aware path candidates
 complete -c pikpaktui -n "__pikpaktui_using_command ls; and not __pikpaktui_prev_is -s --sort --depth" -a "(__pikpaktui_cloud_path)"
-complete -c pikpaktui -n "__pikpaktui_using_command mv; or __pikpaktui_using_command cp; or __pikpaktui_using_command rename; or __pikpaktui_using_command rm; or __pikpaktui_using_command mkdir; or __pikpaktui_using_command star; or __pikpaktui_using_command unstar; or __pikpaktui_using_command info; or __pikpaktui_using_command link; or __pikpaktui_using_command cat; or __pikpaktui_using_command play" -a "(__pikpaktui_cloud_path)"
+complete -c pikpaktui -n "__pikpaktui_using_command mv; or __pikpaktui_using_command cp; or __pikpaktui_using_command rename; or __pikpaktui_using_command rm; or __pikpaktui_using_command mkdir; or __pikpaktui_using_command star; or __pikpaktui_using_command unstar; or __pikpaktui_using_command info; or __pikpaktui_using_command link; or __pikpaktui_using_command cat" -a "(__pikpaktui_cloud_path)"
+complete -c pikpaktui -n "__pikpaktui_using_command play; and not __pikpaktui_prev_is -q --quality" -a "(__pikpaktui_cloud_path)"
 complete -c pikpaktui -n "__pikpaktui_using_command download; and not __pikpaktui_prev_is -o --output -t -j --jobs" -a "(__pikpaktui_cloud_path)"
 complete -c pikpaktui -n "__pikpaktui_using_command download; and __pikpaktui_prev_is -o --output -t" -F
 complete -c pikpaktui -n "__pikpaktui_using_command upload; and __pikpaktui_prev_is -t" -a "(__pikpaktui_cloud_path)"
@@ -633,6 +652,9 @@ complete -c pikpaktui -n "__pikpaktui_using_command info" -s J -l json -d "JSON 
 complete -c pikpaktui -n "__pikpaktui_using_command link" -s m -l media -d "Show media stream URLs"
 complete -c pikpaktui -n "__pikpaktui_using_command link" -s c -l copy -d "Copy URL to clipboard"
 complete -c pikpaktui -n "__pikpaktui_using_command link" -s J -l json -d "JSON output"
+complete -c pikpaktui -n "__pikpaktui_using_command play" -s r -l recent -d "Play the most recently added video"
+complete -c pikpaktui -n "__pikpaktui_using_command play" -s q -l quality -x -a "original 720p 1080p" -d "Stream name or index (default: original)"
+complete -c pikpaktui -n "__pikpaktui_using_command play" -s l -l list-stream -d "List streams without playback"
 complete -c pikpaktui -n "__pikpaktui_using_command starred; or __pikpaktui_using_command trash" -s l -l long -d "Long format"
 complete -c pikpaktui -n "__pikpaktui_using_command starred; or __pikpaktui_using_command trash; or __pikpaktui_using_command events" -s J -l json -d "JSON output"
 complete -c pikpaktui -n "__pikpaktui_using_command untrash" -s n -l dry-run -d "Preview without restoring"
@@ -768,12 +790,19 @@ Register-ArgumentCompleter -Native -CommandName @('pikpaktui') -ScriptBlock {
                     'unstar'   { @('-n','--dry-run') }
                     'info'     { @('-J','--json') }
                     'link'     { @('-m','--media','-c','--copy','-J','--json') }
+                    'play'     { @('-r','--recent','-q','--quality','-l','--list-stream') }
                     'trash'    { @('-l','--long','-J','--json') }
                     default    { @() }
                 }
                 $opts | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
                 }
+            } elseif ($command -eq 'play' -and $previous -in @('-q','--quality')) {
+                @('original','720p','1080p') |
+                    Where-Object { $_ -like "$wordToComplete*" } |
+                    ForEach-Object {
+                        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+                    }
             } elseif ($command -eq 'download' -and $previous -in @('-o','--output','-t')) {
                 Get-LocalPaths $wordToComplete
             } elseif ($command -eq 'upload' -and $previous -ne '-t') {

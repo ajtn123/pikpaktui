@@ -86,6 +86,8 @@ pikpaktui completions powershell | Out-String | Invoke-Expression
 | `pikpaktui info /path<Tab>` | Cloud path |
 | `pikpaktui cat /path<Tab>` | Cloud path |
 | `pikpaktui play /path<Tab>` | Cloud path |
+| `pikpaktui play -<Tab>` | Recent video, quality, and stream-listing flags |
+| `pikpaktui play -q <Tab>` | `original`, `720p`, `1080p` |
 | `pikpaktui rename /path<Tab>` | Cloud path |
 | `pikpaktui star /path<Tab>` | Cloud path |
 | `pikpaktui unstar /path<Tab>` | Cloud path |

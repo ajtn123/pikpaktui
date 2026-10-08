@@ -159,6 +159,8 @@ pub struct EventEntry {
     #[serde(default)]
     pub file_name: Option<String>,
     #[serde(default)]
+    pub file_id: Option<String>,
+    #[serde(default)]
     pub created_time: Option<String>,
     #[serde(default)]
     pub reference_resource: Option<EventRefResource>,
@@ -167,11 +169,19 @@ pub struct EventEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventRefResource {
     #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    #[serde(default)]
+    pub file_category: Option<String>,
+    #[serde(default)]
+    pub trashed: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

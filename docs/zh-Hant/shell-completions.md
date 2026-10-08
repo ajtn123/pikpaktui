@@ -83,6 +83,8 @@ pikpaktui completions powershell | Out-String | Invoke-Expression
 | `pikpaktui info /path<Tab>` | 雲端路徑 |
 | `pikpaktui cat /path<Tab>` | 雲端路徑 |
 | `pikpaktui play /path<Tab>` | 雲端路徑 |
+| `pikpaktui play -<Tab>` | 最近影片、畫質與列出串流的選項 |
+| `pikpaktui play -q <Tab>` | `original`、`720p`、`1080p` |
 | `pikpaktui rename /path<Tab>` | 雲端路徑 |
 | `pikpaktui completions <Tab>` | `bash`、`zsh`、`fish`、`powershell` |
 

@@ -239,23 +239,32 @@ pikpaktui cat "/My Pack/notes.txt"
 
 ## play
 
-Stream a video file using an external player. Lists available quality options if no quality is specified.
+Stream a video file using an external player. Plays the original file by default.
 
 ```
-pikpaktui play <path> [quality]
+pikpaktui play [options] <path>
+pikpaktui play [options] --recent
 ```
 
-| Argument | Description |
-|----------|-------------|
-| `quality` | Stream quality: `720`, `1080`, `original`, or a stream index number |
+| Flag | Description |
+|------|-------------|
+| `-r`, `--recent` | Select the newest added video on the first page of recent events; cannot be combined with a path |
+| `-q`, `--quality <quality>` | Stream name such as `720p`, `1080p`, or `original`, or a stream index number; defaults to `original` |
+| `-l`, `--list-stream` | List available streams without starting playback |
+
+Options may appear before or after the path. If `--list-stream` and `--quality` are both supplied, streams are listed without playback.
+
+`--recent` reuses the `events` lookup and checks only its first page (up to 100 events). If that page contains no added video, it reports this and stops.
 
 **Examples:**
 
 ```bash
-pikpaktui play "/My Pack/video.mp4"           # list available streams
-pikpaktui play "/My Pack/video.mp4" 1080      # play 1080p
-pikpaktui play "/My Pack/video.mp4" original  # play original file
-pikpaktui play "/My Pack/video.mp4" 2         # play stream #2 by index
+pikpaktui play "/My Pack/video.mp4"           # play original file
+pikpaktui play "/My Pack/video.mp4" -q 1080p  # play 1080p
+pikpaktui play "/My Pack/video.mp4" -q 2      # play stream #2 by index
+pikpaktui play -l "/My Pack/video.mp4"        # list available streams
+pikpaktui play -r                             # play the most recently added video
+pikpaktui play --recent --list-stream         # list its available streams
 ```
 
 :::callout[Player configuration]{kind="info"}

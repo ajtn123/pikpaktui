@@ -84,6 +84,8 @@ pikpaktui completions powershell | Out-String | Invoke-Expression
 | `pikpaktui info /path<Tab>` | 云端路径 |
 | `pikpaktui cat /path<Tab>` | 云端路径 |
 | `pikpaktui play /path<Tab>` | 云端路径 |
+| `pikpaktui play -<Tab>` | 最近视频、画质和列出流的选项 |
+| `pikpaktui play -q <Tab>` | `original`、`720p`、`1080p` |
 | `pikpaktui rename /path<Tab>` | 云端路径 |
 | `pikpaktui star /path<Tab>` | 云端路径 |
 | `pikpaktui unstar /path<Tab>` | 云端路径 |

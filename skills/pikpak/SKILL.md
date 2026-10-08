@@ -155,8 +155,17 @@ Stream videos to a local player (requires `player` configured in `~/.config/pikp
 
 ```bash
 pikpaktui play /movie.mkv              # Original quality
-pikpaktui play /movie.mkv 1080         # Specific quality
+pikpaktui play /movie.mkv -q 1080p     # Specific quality
+pikpaktui play /movie.mkv -q 2         # Stream #2 by index
+pikpaktui play /movie.mkv -l           # List available streams without playback
+pikpaktui play -r                      # Play the most recently added video
+pikpaktui play --recent --list-stream  # List that video's streams
 ```
+
+Use a path or `-r`/`--recent`, but not both. `-q`/`--quality` defaults to `original`.
+`-l`/`--list-stream` takes precedence over quality selection.
+`--recent` checks only the first page of `events` (up to 100 records) and reports when that page has no added video.
+Options may appear before or after the path.
 
 ## Account Info
 

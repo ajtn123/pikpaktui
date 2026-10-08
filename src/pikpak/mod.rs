@@ -1295,6 +1295,135 @@ mod tests {
     }
 
     #[test]
+    fn recent_video_reuses_events_and_stops_at_first_match() {
+        let root = temp_test_dir("recent-video-query");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_test_http_request(&mut stream).unwrap();
+            let first_line = request.lines().next().unwrap();
+            assert!(first_line.starts_with("GET /drive/v1/events?"));
+            let target = first_line.split_whitespace().nth(1).unwrap();
+            let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+            let params: HashMap<_, _> = url.query_pairs().into_owned().collect();
+            assert_eq!(params.get("limit").unwrap(), "100");
+            assert_eq!(params.get("thumbnail_size").unwrap(), "SIZE_MEDIUM");
+            assert!(!params.contains_key("page_token"));
+            assert!(!params.contains_key("parent_id"));
+            write_response(
+                &mut stream,
+                200,
+                "OK",
+                br#"{"events":[{"type":"TYPE_CREATE","file_id":"video","file_name":"old-name.mkv","reference_resource":{"id":"fallback-id","name":"Movie.mkv","parent_id":"nested-folder","file_category":"VIDEO"}},{"type":"TYPE_CREATE","file_id":"older","reference_resource":{"name":"Older.mkv","mime_type":"video/mp4"}}],"next_page_token":"not-needed"}"#,
+            );
+        });
+        let client = test_client(base_url, root.join("session.json"));
+
+        let (video, parent_id) = client.recent_video().unwrap().unwrap();
+
+        assert_eq!(video.id, "video");
+        assert_eq!(video.name, "Movie.mkv");
+        assert_eq!(parent_id, "nested-folder");
+        handle.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_video_skips_other_activity_and_selects_first_added_video() {
+        let root = temp_test_dir("recent-video-filter");
+        let (base_url, requests, handle) = start_paginated_get_server(vec![
+            r#"{"events":[
+                {"type":"TYPE_PLAY","file_id":"played","reference_resource":{"name":"Played.mp4","mime_type":"video/mp4"}},
+                {"type":"TYPE_UPDATE","file_id":"renamed","reference_resource":{"name":"Renamed.mp4","mime_type":"video/mp4"}},
+                {"type":"TYPE_DOWNLOAD","file_id":"downloaded","reference_resource":{"name":"Downloaded.mp4","mime_type":"video/mp4"}},
+                {"type":"TYPE_DELETE","file_id":"deleted"},
+                {"type":"TYPE_CREATE","file_id":"text","reference_resource":{"name":"Notes.txt","mime_type":"text/plain"}},
+                {"type":"TYPE_CREATE","file_id":"folder","reference_resource":{"name":"Folder.mp4","kind":"drive#folder","file_category":"VIDEO"}},
+                {"type":"TYPE_CREATE","file_id":"trash","reference_resource":{"name":"Trash.mp4","mime_type":"video/mp4","trashed":true}},
+                {"type":"TYPE_CREATE","file_id":"deleted","reference_resource":{"name":"Deleted.mp4","mime_type":"video/mp4"}},
+                {"type":"TYPE_UPLOAD","file_id":"newest","reference_resource":{"name":"Latest.webm","parent_id":"folder-b","mime_type":"video/webm"}},
+                {"type":"TYPE_CREATE","file_id":"older","reference_resource":{"name":"Older.mp4","mime_type":"video/mp4"}}
+            ]}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        let (video, parent_id) = client.recent_video().unwrap().unwrap();
+
+        assert_eq!(video.id, "newest");
+        assert_eq!(parent_id, "folder-b");
+        handle.join().unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![None]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_video_stops_when_first_page_has_no_usable_videos() {
+        let root = temp_test_dir("recent-video-empty");
+        let (base_url, requests, handle) = start_paginated_get_server(vec![
+            r#"{"events":[
+                {"type":"TYPE_CREATE","file_id":"missing-resource"},
+                {"type":"TYPE_CREATE","reference_resource":{"name":"Missing-id.mp4","mime_type":"video/mp4"}},
+                {"type":"TYPE_CREATE","file_id":"missing-name","reference_resource":{"mime_type":"video/mp4"}},
+                {"type":"TYPE_CREATE","file_id":"text","reference_resource":{"name":"Notes.txt","mime_type":null,"file_category":null,"trashed":null}}
+            ],"next_page_token":"last"}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        assert!(client.recent_video().unwrap().is_none());
+
+        handle.join().unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![None]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_video_uses_resource_id_and_event_name_for_restored_root_video() {
+        let root = temp_test_dir("recent-video-root");
+        let (base_url, _, handle) = start_paginated_get_server(vec![
+            r#"{"events":[{"type":"TYPE_RESTORE","file_id":"","file_name":"Root.mp4","created_time":"not-needed-for-ordering","reference_resource":{"id":"root-video","name":"","parent_id":null,"mime_type":"video/mp4","file_category":null,"trashed":null}}]}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        let (video, parent_id) = client.recent_video().unwrap().unwrap();
+
+        assert_eq!(video.id, "root-video");
+        assert_eq!(video.name, "Root.mp4");
+        assert!(parent_id.is_empty());
+        handle.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_video_stops_on_empty_first_page() {
+        let root = temp_test_dir("recent-video-empty-page");
+        let (base_url, requests, handle) =
+            start_paginated_get_server(vec![r#"{"events":[],"next_page_token":"not-needed"}"#]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        assert!(client.recent_video().unwrap().is_none());
+
+        handle.join().unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![None]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_video_propagates_events_error() {
+        let root = temp_test_dir("recent-video-events-error");
+        let (base_url, handle) =
+            start_canned_server(500, "Internal Server Error", b"events boom".to_vec());
+        let client = test_client(base_url, root.join("session.json"));
+
+        let error = client.recent_video().unwrap_err();
+
+        assert!(error.to_string().contains("events failed (500"));
+        assert!(error.to_string().contains("events boom"));
+        handle.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn playback_resolves_matching_subtitles_across_listing_pages() {
         let root = temp_test_dir("playback-subtitles");
         let (base_url, requests, handle) = start_paginated_get_server(vec![
