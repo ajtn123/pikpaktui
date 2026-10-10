@@ -72,6 +72,7 @@ pikpaktui completions powershell | Out-String | Invoke-Expression
 | `pikpaktui mv /src<Tab>` | 雲端路徑補全 |
 | `pikpaktui mv -t /dst<Tab>` | `-t` 目標的雲端路徑 |
 | `pikpaktui download /cloud<Tab>` | 雲端路徑補全 |
+| `pikpaktui download -<Tab>` | 最近項目、輸出、並行和預覽選項 |
 | `pikpaktui download -o <Tab>` | 本機檔案路徑 |
 | `pikpaktui upload <Tab>` | 本機檔案路徑 |
 | `pikpaktui upload -t /dst<Tab>` | `-t` 目標的雲端路徑 |

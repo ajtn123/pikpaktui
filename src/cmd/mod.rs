@@ -178,16 +178,20 @@ pub fn command_help_text(cmd: &str) -> (&'static str, &'static str, String) {
             ),
         ),
         "download" => (
-            "download [options] <path> [output]",
+            "download [options] [path] [output]",
             "Download files or folders",
             format!(
                 "{B}OPTIONS:{R}\n\
-                 {opt}  -o, --output <file> {d}Output file name{R}\n\
+                 {opt}  -r, --recent        {d}Download the newest added file or folder{R}\n\
+                 {opt}  -o, --output <path> {d}Output file or folder path{R}\n\
                  {opt}  -t <local_dir>      {d}Batch: download multiple paths into dir{R}\n\
                  {opt}  -j, --jobs <n>      {d}Concurrent downloads (default: 1){R}\n\
                  {opt}  -n, --dry-run       {d}Preview without downloading{R}\n\
+                 \nProvide a path or --recent, but not both. Use -o or -t for the --recent destination.\n\
+                 --recent checks the first events page (up to 100 events).\n\
                  \n{B}EXAMPLES:{R}\n\
                  {ex}  pikpaktui download /movie.mkv{R}\n\
+                 {ex}  pikpaktui download --recent -t ./local{R}\n\
                  {ex}  pikpaktui download -j 4 -t ./local /Movies{R}\n",
                 opt = G,
                 d = D,

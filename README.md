@@ -94,6 +94,7 @@ Use CLI subcommands directly:
 ```bash
 pikpaktui ls /
 pikpaktui download "/My Pack/video.mp4"
+pikpaktui download --recent  # Newest added file or folder
 pikpaktui upload ./local.txt "/My Pack"
 pikpaktui share -p -d 7 /movie.mkv
 ```

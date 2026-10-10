@@ -274,19 +274,27 @@ pikpaktui play --recent --list-stream         # 列出该视频的可用流
 ```
 pikpaktui download [选项] <路径>
 pikpaktui download [选项] -t <本地目录> <路径...>
+pikpaktui download [选项] --recent
 ```
 
 | 参数 | 说明 |
 |------|------|
-| `-o`, `--output <文件>` | 自定义输出文件名（仅单文件） |
+| `-r`, `--recent` | 选择最近活动首页中最新添加的文件或文件夹；不能与位置路径参数同时使用 |
+| `-o`, `--output <路径>` | 自定义单个文件或文件夹的本地路径 |
 | `-t <本地目录>` | 批量模式——将多个文件下载到指定目录 |
 | `-j`, `--jobs <n>` | 递归下载文件夹时的文件并发数（1–16，默认 1） |
 | `-n`, `--dry-run` | 预览，不下载 |
+
+`--recent` 只检查 `events` 的第一页（最多 100 条记录）。如果该页没有添加的文件或文件夹，会提示并停止。文件夹会递归下载。
+使用 `-o <路径>` 指定目标路径，或使用 `-t <本地目录>` 将选中的项目以原名保存到该目录。
+`--dry-run` 和 `--jobs` 也可与 `--recent` 配合使用。
 
 **示例：**
 
 ```bash
 pikpaktui download "/My Pack/file.txt"                  # 下载到当前目录
+pikpaktui download -r                                  # 最新添加的文件或文件夹
+pikpaktui download --recent -n -t ./local               # 预览目标路径
 pikpaktui download "/My Pack/file.txt" /tmp/file.txt    # 下载到指定路径
 pikpaktui download -o output.mp4 "/My Pack/video.mp4"   # 自定义文件名
 pikpaktui download "/My Pack/folder"                    # 递归下载文件夹

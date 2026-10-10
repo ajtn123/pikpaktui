@@ -73,6 +73,7 @@ pikpaktui completions powershell | Out-String | Invoke-Expression
 | `pikpaktui mv -t /dst<Tab>` | `-t` 目标的云端路径 |
 | `pikpaktui cp /src<Tab>` | 云端路径补全 |
 | `pikpaktui download /cloud<Tab>` | 云端路径补全 |
+| `pikpaktui download -<Tab>` | 最近项目、输出、并发和预览选项 |
 | `pikpaktui download -o <Tab>` | 本地文件路径 |
 | `pikpaktui upload <Tab>` | 本地文件路径 |
 | `pikpaktui upload -t /dst<Tab>` | `-t` 目标的云端路径 |

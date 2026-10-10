@@ -302,19 +302,28 @@ Download files or entire folders recursively to local storage.
 ```
 pikpaktui download [options] <path>
 pikpaktui download [options] -t <local_dir> <path...>
+pikpaktui download [options] --recent
 ```
 
 | Flag | Description |
 |------|-------------|
-| `-o`, `--output <file>` | Custom output filename (single file only) |
+| `-r`, `--recent` | Select the newest added file or folder on the first page of recent events; cannot be combined with positional paths |
+| `-o`, `--output <path>` | Custom local path for a single file or folder |
 | `-t <local_dir>` | Batch mode — download multiple items into `<local_dir>` |
 | `-j`, `--jobs <n>` | Concurrent files within recursive folder downloads (1–16; default: 1) |
 | `-n`, `--dry-run` | Preview without downloading |
+
+`--recent` checks the first page of `events` (up to 100 records). If that page has no
+added file or folder, it reports this and stops. Folders are downloaded recursively.
+Use `-o <path>` to choose the destination or `-t <local_dir>` to keep the selected
+item's name in that directory. `--dry-run` and `--jobs` also work with `--recent`.
 
 **Examples:**
 
 ```bash
 pikpaktui download "/My Pack/file.txt"                  # to current dir
+pikpaktui download -r                                  # newest added file or folder
+pikpaktui download --recent -n -t ./local               # preview its destination
 pikpaktui download "/My Pack/file.txt" /tmp/file.txt    # to specific path
 pikpaktui download -o output.mp4 "/My Pack/video.mp4"   # custom name
 pikpaktui download "/My Pack/folder"                    # recursive folder

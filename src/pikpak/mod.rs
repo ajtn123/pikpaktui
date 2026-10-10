@@ -1373,6 +1373,128 @@ mod tests {
     }
 
     #[test]
+    fn recent_entry_selects_newest_file_or_folder() {
+        for (kind, expected_kind) in [
+            ("drive#file", EntryKind::File),
+            ("drive#folder", EntryKind::Folder),
+        ] {
+            let root = temp_test_dir("recent-entry-kind");
+            let body = serde_json::json!({
+                "events": [
+                    {
+                        "type": "TYPE_CREATE",
+                        "file_id": "newest",
+                        "file_name": "old-name",
+                        "created_time": "2026-10-10T12:00:00Z",
+                        "reference_resource": {
+                            "id": "fallback-id",
+                            "name": "Latest",
+                            "kind": kind,
+                            "parent_id": "parent",
+                            "phase": "PHASE_TYPE_COMPLETE",
+                            "audit": {"status": "STATUS_OK"}
+                        }
+                    },
+                    {
+                        "type": "TYPE_CREATE",
+                        "file_id": "older",
+                        "reference_resource": {"name": "Older", "kind": "drive#file"}
+                    }
+                ],
+                "next_page_token": "not-needed"
+            });
+            let (base_url, handle) =
+                start_canned_server(200, "OK", serde_json::to_vec(&body).unwrap());
+            let client = test_client(base_url, root.join("session.json"));
+
+            let (entry, parent_id) = client.recent_entry().unwrap().unwrap();
+
+            assert_eq!(entry.id, "newest");
+            assert_eq!(entry.name, "Latest");
+            assert_eq!(entry.kind, expected_kind);
+            assert_eq!(entry.created_time, "2026-10-10T12:00:00Z");
+            assert_eq!(parent_id, "parent");
+            assert_eq!(entry.phase.as_deref(), Some("PHASE_TYPE_COMPLETE"));
+            assert_eq!(
+                entry.audit,
+                Some(serde_json::json!({"status": "STATUS_OK"}))
+            );
+            handle.join().unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn recent_entry_skips_other_activity_deleted_and_incomplete_resources() {
+        let root = temp_test_dir("recent-entry-filter");
+        let (base_url, requests, handle) = start_paginated_get_server(vec![
+            r#"{"events":[
+                {"type":"TYPE_PLAY","file_id":"played","reference_resource":{"name":"Played.mp4"}},
+                {"type":"TYPE_UPDATE","file_id":"renamed","reference_resource":{"name":"Renamed"}},
+                {"type":"TYPE_DOWNLOAD","file_id":"downloaded","reference_resource":{"name":"Downloaded"}},
+                {"type":"TYPE_DELETE","reference_resource":{"id":"deleted"}},
+                {"type":"TYPE_CREATE","file_id":"deleted","reference_resource":{"name":"Deleted"}},
+                {"type":"TYPE_CREATE","file_id":"trashed","reference_resource":{"name":"Trashed","trashed":true}},
+                {"type":"TYPE_CREATE","file_id":"trashed","reference_resource":{"name":"Previously untrashed"}},
+                {"type":"TYPE_CREATE","file_id":"missing-resource","file_name":"Missing resource"},
+                {"type":"TYPE_CREATE","file_id":"","reference_resource":{"id":"","name":"Missing ID"}},
+                {"type":"TYPE_CREATE","file_id":"missing-name","file_name":"","reference_resource":{"name":""}},
+                {"type":"TYPE_UPLOAD","file_id":"newest","reference_resource":{"name":"Notes.txt","parent_id":"notes","mime_type":"text/plain"}},
+                {"type":"TYPE_CREATE","file_id":"older","reference_resource":{"name":"Folder","kind":"drive#folder"}}
+            ]}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        let (entry, parent_id) = client.recent_entry().unwrap().unwrap();
+
+        assert_eq!(entry.id, "newest");
+        assert_eq!(entry.kind, EntryKind::File);
+        assert_eq!(parent_id, "notes");
+        handle.join().unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![None]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_entry_uses_resource_id_and_event_name_for_restored_root_folder() {
+        let root = temp_test_dir("recent-entry-root");
+        let (base_url, _, handle) = start_paginated_get_server(vec![
+            r#"{"events":[{"type":"TYPE_RESTORE","file_id":"","file_name":"Restored","reference_resource":{"id":"folder","name":"","kind":"drive#folder","parent_id":null}}]}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        let (entry, parent_id) = client.recent_entry().unwrap().unwrap();
+
+        assert_eq!(entry.id, "folder");
+        assert_eq!(entry.name, "Restored");
+        assert_eq!(entry.kind, EntryKind::Folder);
+        assert!(parent_id.is_empty());
+        assert!(entry.phase.is_none());
+        assert!(entry.audit.is_none());
+        handle.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_entry_stops_when_first_page_has_no_usable_entries() {
+        let root = temp_test_dir("recent-entry-empty");
+        let (base_url, requests, handle) = start_paginated_get_server(vec![
+            r#"{"events":[
+                {"type":"TYPE_CREATE","file_id":"missing-resource"},
+                {"type":"TYPE_CREATE","reference_resource":{"name":"Missing ID"}},
+                {"type":"TYPE_CREATE","file_id":"missing-name","reference_resource":{}}
+            ],"next_page_token":"last"}"#,
+        ]);
+        let client = test_client(base_url, root.join("session.json"));
+
+        assert!(client.recent_entry().unwrap().is_none());
+
+        handle.join().unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![None]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn recent_video_reuses_events_and_stops_at_first_match() {
         let root = temp_test_dir("recent-video-query");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

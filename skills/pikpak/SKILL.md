@@ -94,7 +94,14 @@ pikpaktui starred                     # List starred files
 pikpaktui download /movie.mkv                  # Download to current dir
 pikpaktui download -o output.mkv /movie.mkv    # Custom output name
 pikpaktui download -j4 -t ./local /Movies      # Concurrent, to local dir
+pikpaktui download -r                         # Most recently added file or folder
+pikpaktui download --recent -n -t ./local     # Preview its local destination
 ```
+
+Use cloud paths or `-r`/`--recent`, but not both. Recent selection checks only the first
+page of `events` (up to 100 records) and reports when that page has no added file or folder.
+Use `-o <output>` to choose its local path or `-t <local_dir>` to keep its name in a directory.
+`-n`/`--dry-run` and `-j`/`--jobs` also work with `--recent`.
 
 ### Upload files
 

@@ -268,19 +268,27 @@ pikpaktui play --recent --list-stream         # 列出該影片的可用串流
 ```
 pikpaktui download [選項] <路徑>
 pikpaktui download [選項] -t <本機目錄> <路徑...>
+pikpaktui download [選項] --recent
 ```
 
 | 參數 | 說明 |
 |------|------|
-| `-o`, `--output <檔案>` | 自訂輸出檔案名稱（僅單一檔案） |
+| `-r`, `--recent` | 選擇最近活動首頁中最新新增的檔案或資料夾；不能與位置路徑參數同時使用 |
+| `-o`, `--output <路徑>` | 自訂單一檔案或資料夾的本機路徑 |
 | `-t <本機目錄>` | 批次模式——將多個檔案下載至指定目錄 |
 | `-j`, `--jobs <n>` | 遞迴下載資料夾時的檔案並行數（1–16，預設 1） |
 | `-n`, `--dry-run` | 預覽，不下載 |
+
+`--recent` 只檢查 `events` 的第一頁（最多 100 筆記錄）。如果該頁沒有新增的檔案或資料夾，會提示並停止。資料夾會遞迴下載。
+使用 `-o <路徑>` 指定目標路徑，或使用 `-t <本機目錄>` 將選取的項目以原名儲存至該目錄。
+`--dry-run` 和 `--jobs` 也可與 `--recent` 搭配使用。
 
 **範例：**
 
 ```bash
 pikpaktui download "/My Pack/file.txt"
+pikpaktui download -r                                  # 最新新增的檔案或資料夾
+pikpaktui download --recent -n -t ./local               # 預覽目標路徑
 pikpaktui download -o output.mp4 "/My Pack/video.mp4"
 pikpaktui download "/My Pack/folder"                      # 遞迴下載
 pikpaktui download -j 4 "/My Pack/folder"                # 資料夾內最多 4 個檔案並行

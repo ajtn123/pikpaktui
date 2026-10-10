@@ -74,6 +74,7 @@ pikpaktui completions powershell | Out-String | Invoke-Expression
 | `pikpaktui mv -t /dst<Tab>` | Cloud path for `-t` target |
 | `pikpaktui cp /src<Tab>` | Cloud path completion |
 | `pikpaktui download /cloud<Tab>` | Cloud path completion |
+| `pikpaktui download -<Tab>` | Recent item, output, concurrency, and dry-run options |
 | `pikpaktui download -o <Tab>` | Local file path |
 | `pikpaktui upload <Tab>` | Local file path |
 | `pikpaktui upload -t /dst<Tab>` | Cloud path for `-t` target |

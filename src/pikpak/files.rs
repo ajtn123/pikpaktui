@@ -1,12 +1,40 @@
 use anyhow::{Context, Result, anyhow};
 
 use super::drive::{DriveFileResponse, DriveListResponse};
-use super::{Entry, FileInfoResponse, PikPak, ensure_success, json_or_api_error};
+use super::responses::EventRefResource;
+use super::{Entry, EntryKind, FileInfoResponse, PikPak, ensure_success, json_or_api_error};
 
 impl PikPak {
+    /// Find the newest added file or folder on the first events page.
+    /// Returns the entry together with its parent folder ID.
+    pub fn recent_entry(&self) -> Result<Option<(Entry, String)>> {
+        self.recent_entry_matching(|_| true)
+    }
+
     /// Find the newest added video on the first page of the activity log used
     /// by `events`, preserving its parent folder for matching subtitles.
     pub fn recent_video(&self) -> Result<Option<(Entry, String)>> {
+        self.recent_entry_matching(|resource| {
+            let is_video = resource
+                .mime_type
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("video/"))
+                || resource
+                    .file_category
+                    .as_deref()
+                    .is_some_and(|category| category.eq_ignore_ascii_case("VIDEO"));
+            is_video
+                && !resource
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| kind.contains("folder"))
+        })
+    }
+
+    fn recent_entry_matching(
+        &self,
+        matches: impl Fn(&EventRefResource) -> bool,
+    ) -> Result<Option<(Entry, String)>> {
         let page = self.events(100)?;
         let mut deleted_ids = std::collections::HashSet::new();
 
@@ -40,20 +68,7 @@ impl PikPak {
             let Some(resource) = event.reference_resource else {
                 continue;
             };
-            let is_video = resource
-                .mime_type
-                .as_deref()
-                .is_some_and(|mime| mime.starts_with("video/"))
-                || resource
-                    .file_category
-                    .as_deref()
-                    .is_some_and(|category| category.eq_ignore_ascii_case("VIDEO"));
-            if !is_video
-                || resource
-                    .kind
-                    .as_deref()
-                    .is_some_and(|kind| kind.contains("folder"))
-            {
+            if !matches(&resource) {
                 continue;
             }
             let Some(name) = resource
@@ -66,7 +81,15 @@ impl PikPak {
             let entry = Entry {
                 id,
                 name,
-                kind: super::EntryKind::File,
+                kind: if resource
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| kind.contains("folder"))
+                {
+                    EntryKind::Folder
+                } else {
+                    EntryKind::File
+                },
                 size: 0,
                 created_time: event.created_time.unwrap_or_default(),
                 modified_time: String::new(),

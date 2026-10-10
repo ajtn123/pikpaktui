@@ -153,7 +153,7 @@ _pikpaktui() {
             ;;
         download)
             if [[ "${words[CURRENT]}" == -* ]]; then
-                compadd -- '-o' '--output' '-t' '-j' '--jobs' '-n' '--dry-run'
+                compadd -- '-r' '--recent' '-o' '--output' '-t' '-j' '--jobs' '-n' '--dry-run'
             elif [[ "${words[CURRENT-1]}" == "-o" ]] || [[ "${words[CURRENT-1]}" == "--output" ]] || [[ "${words[CURRENT-1]}" == "-t" ]]; then
                 _files
             else
@@ -390,7 +390,7 @@ whoami login update completions help version"
             ;;
         download)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=($(compgen -W "-o --output -t -j --jobs -n --dry-run" -- "$cur"))
+                COMPREPLY=($(compgen -W "-r --recent -o --output -t -j --jobs -n --dry-run" -- "$cur"))
             elif [[ "$prev" == "-o" ]] || [[ "$prev" == "--output" ]] || [[ "$prev" == "-t" ]]; then
                 _pikpaktui_local_path
             else
@@ -613,7 +613,8 @@ complete -c pikpaktui -n "__pikpaktui_using_command rm" -s r -l recursive -d "Re
 complete -c pikpaktui -n "__pikpaktui_using_command rm" -s f -l force -d "Permanently delete"
 complete -c pikpaktui -n "__pikpaktui_using_command rm" -s n -l dry-run -d "Preview without executing"
 complete -c pikpaktui -n "__pikpaktui_using_command mkdir" -s p -d "Create intermediate directories"
-complete -c pikpaktui -n "__pikpaktui_using_command download" -s o -l output -d "Output file"
+complete -c pikpaktui -n "__pikpaktui_using_command download" -s r -l recent -d "Download the most recently added file or folder"
+complete -c pikpaktui -n "__pikpaktui_using_command download" -s o -l output -d "Output file or folder path"
 complete -c pikpaktui -n "__pikpaktui_using_command download; or __pikpaktui_using_command upload" -s t -d "Batch destination"
 complete -c pikpaktui -n "__pikpaktui_using_command download" -s j -l jobs -d "Concurrent downloads"
 
@@ -782,7 +783,7 @@ Register-ArgumentCompleter -Native -CommandName @('pikpaktui') -ScriptBlock {
                     'rename'   { @('-n','--dry-run') }
                     'rm'       { @('-r','--recursive','-f','--force','-rf','-fr','-n','--dry-run') }
                     'mkdir'    { @('-p','-n','--dry-run') }
-                    'download' { @('-o','--output','-t','-j','--jobs','-n','--dry-run') }
+                    'download' { @('-r','--recent','-o','--output','-t','-j','--jobs','-n','--dry-run') }
                     'upload'   { @('-t','-n','--dry-run') }
                     'share'    { @('-p','--password','--pass-code','-d','--days','-o','-l','--list','-S','--save','-b','--browse','-D','--delete','-t','--to','-J','--json','-n','--dry-run') }
                     'offline'  { @('-t','--to','--name','-p','--preview','-n','--dry-run') }
@@ -1150,6 +1151,7 @@ mod tests {
         }
 
         let shell_case_contracts: &[(&str, &[&str])] = &[
+            ("download", &["-r", "--recent"]),
             ("star|unstar", &["--dry-run"]),
             ("info", &["--json"]),
             ("link", &["--media", "--copy", "--json"]),
@@ -1170,6 +1172,7 @@ mod tests {
         }
 
         let line_contracts: &[(&str, &[&str])] = &[
+            ("download", &["--recent"]),
             ("star", &["--dry-run"]),
             ("unstar", &["--dry-run"]),
             ("info", &["--json"]),
