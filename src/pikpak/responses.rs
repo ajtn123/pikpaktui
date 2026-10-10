@@ -142,6 +142,10 @@ pub struct OfflineTask {
 pub struct OfflineListResponse {
     #[serde(default)]
     pub tasks: Vec<OfflineTask>,
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+    #[serde(default)]
+    pub expires_in: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +186,10 @@ pub struct EventRefResource {
     pub file_category: Option<String>,
     #[serde(default)]
     pub trashed: Option<bool>,
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub audit: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

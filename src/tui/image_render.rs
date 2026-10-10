@@ -2,6 +2,36 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
+/// Keep the same terminal image id/encoding across frames and list selections.
+pub(super) struct InlineImageProtocol {
+    pub cells: (u16, u16),
+    pub font_size: (u16, u16),
+    pub protocol_type: ratatui_image::picker::ProtocolType,
+    pub protocol: ratatui_image::protocol::StatefulProtocol,
+}
+
+pub(super) fn render_image_protocol(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    protocol: &mut ratatui_image::protocol::StatefulProtocol,
+) {
+    frame.render_stateful_widget(ratatui_image::StatefulImage::default(), area, protocol);
+    // Native protocols put escape payloads in an anchor cell and mark the
+    // remaining image cells as skipped. Ratatui otherwise counts the escape
+    // bytes as visible columns, skipping nearby text or another image's
+    // first transmission. Keep the library's skip markers and give each
+    // payload anchor one cell in the buffer diff.
+    for y in area.top()..area.bottom() {
+        if let Some(cell) = frame.buffer_mut().cell_mut((area.x, y))
+            && cell.symbol().contains('\u{1b}')
+        {
+            cell.set_diff_option(ratatui::buffer::CellDiffOption::ForcedWidth(
+                std::num::NonZeroU16::MIN,
+            ));
+        }
+    }
+}
+
 /// Upscale `img` so it fills at least `area` terminal cells (using `font_size` px/cell).
 /// If the image is already large enough, returns a clone unchanged.
 /// This ensures protocol renderers (Kitty/iTerm2) don't render at native pixel size
@@ -184,4 +214,61 @@ pub(super) fn render_image_to_grayscale_lines(
     }
 
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
+    use ratatui_image::picker::{Picker, ProtocolType};
+
+    #[test]
+    fn native_protocols_preserve_neighboring_text_and_image_transmissions() {
+        for protocol_type in [
+            ProtocolType::Kitty,
+            ProtocolType::Iterm2,
+            ProtocolType::Sixel,
+        ] {
+            let mut picker = Picker::halfblocks();
+            picker.set_protocol_type(protocol_type);
+            let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                16,
+                16,
+                image::Rgba([80, 120, 180, 255]),
+            ));
+            let mut first = picker.new_resize_protocol(image.clone());
+            let mut second = picker.new_resize_protocol(image);
+            let mut terminal = Terminal::new(TestBackend::new(12, 3)).unwrap();
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(
+                        Paragraph::new("   A     B\n   C     D\nfooter"),
+                        frame.area(),
+                    );
+                    render_image_protocol(frame, Rect::new(1, 0, 2, 2), &mut first);
+                    render_image_protocol(frame, Rect::new(7, 0, 2, 2), &mut second);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for (position, expected) in [
+                ((3, 0), "A"),
+                ((9, 0), "B"),
+                ((3, 1), "C"),
+                ((9, 1), "D"),
+                ((0, 2), "f"),
+            ] {
+                assert_eq!(buffer[position].symbol(), expected, "{protocol_type:?}");
+            }
+            for x in [1, 7] {
+                let payload = buffer[(x, 0)].symbol();
+                assert!(payload.contains('\u{1b}'), "{protocol_type:?}, x={x}");
+                if protocol_type == ProtocolType::Kitty {
+                    assert!(
+                        payload.contains("a=T"),
+                        "each Kitty image must transmit its pixels on its first frame"
+                    );
+                }
+            }
+        }
+    }
 }

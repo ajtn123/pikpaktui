@@ -72,6 +72,8 @@ impl PikPak {
                 modified_time: String::new(),
                 starred: false,
                 thumbnail_link: None,
+                phase: resource.phase,
+                audit: resource.audit,
             };
             return Ok(Some((entry, resource.parent_id.unwrap_or_default())));
         }
@@ -81,9 +83,10 @@ impl PikPak {
 
     pub fn ls(&self, parent_id: &str) -> Result<Vec<Entry>> {
         let token = self.access_token()?;
+        let thumbnail_size = self.thumbnail_size();
         let url = self.drive_url("drive/v1/files");
 
-        let filters = r#"{"trashed":{"eq":false}}"#;
+        let filters = r#"{"trashed":{"eq":false},"phase":{"eq":"PHASE_TYPE_COMPLETE"}}"#;
         let mut all_entries: Vec<Entry> = Vec::new();
         let mut page_token: Option<String> = None;
 
@@ -92,7 +95,8 @@ impl PikPak {
                 ("parent_id", parent_id),
                 ("limit", "500"),
                 ("filters", filters),
-                ("thumbnail_size", self.thumbnail_size.as_str()),
+                ("thumbnail_size", thumbnail_size.as_str()),
+                ("with_audit", "true"),
             ]);
             if let Some(ref pt) = page_token {
                 rb = rb.query(&[("page_token", pt.as_str())]);
@@ -167,9 +171,10 @@ impl PikPak {
     /// everything past the first 500 items). Pass `u32::MAX` for all of it.
     pub fn ls_trash(&self, limit: u32) -> Result<Vec<Entry>> {
         let token = self.access_token()?;
+        let thumbnail_size = self.thumbnail_size();
         let url = self.drive_url("drive/v1/files");
 
-        let filters = r#"{"trashed":{"eq":true}}"#;
+        let filters = r#"{"trashed":{"eq":true},"phase":{"eq":"PHASE_TYPE_COMPLETE"}}"#;
         let mut all_entries: Vec<Entry> = Vec::new();
         let mut page_token: Option<String> = None;
 
@@ -181,7 +186,8 @@ impl PikPak {
                 ("parent_id", "*"),
                 ("limit", page_size.as_str()),
                 ("filters", filters),
-                ("thumbnail_size", self.thumbnail_size.as_str()),
+                ("thumbnail_size", thumbnail_size.as_str()),
+                ("with_audit", "true"),
             ]);
             if let Some(ref pt) = page_token {
                 rb = rb.query(&[("page_token", pt.as_str())]);
@@ -211,35 +217,23 @@ impl PikPak {
     }
 
     pub fn mv(&self, ids: &[&str], to_parent_id: &str) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:batchMove");
-
-        let payload = serde_json::json!({
-            "ids": ids,
-            "to": { "parent_id": to_parent_id },
-        });
-
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("move", rb)?;
-        ensure_success(response, "move")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "move",
+            "drive/v1/files:batchMove",
+            ids,
+            "ids",
+            serde_json::json!({"to": {"parent_id": to_parent_id}}),
+        )
     }
 
     pub fn cp(&self, ids: &[&str], to_parent_id: &str) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:batchCopy");
-
-        let payload = serde_json::json!({
-            "ids": ids,
-            "to": { "parent_id": to_parent_id },
-        });
-
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("copy", rb)?;
-        ensure_success(response, "copy")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "copy",
+            "drive/v1/files:batchCopy",
+            ids,
+            "ids",
+            serde_json::json!({"to": {"parent_id": to_parent_id}}),
+        )
     }
 
     pub fn rename(&self, file_id: &str, new_name: &str) -> Result<()> {
@@ -255,27 +249,23 @@ impl PikPak {
     }
 
     pub fn remove(&self, ids: &[&str]) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:batchTrash");
-
-        let payload = serde_json::json!({ "ids": ids });
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("remove", rb)?;
-        ensure_success(response, "remove")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "remove",
+            "drive/v1/files:batchTrash",
+            ids,
+            "ids",
+            serde_json::json!({}),
+        )
     }
 
     pub fn delete_permanent(&self, ids: &[&str]) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:batchDelete");
-
-        let payload = serde_json::json!({ "ids": ids });
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("permanent delete", rb)?;
-        ensure_success(response, "permanent delete")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "permanent delete",
+            "drive/v1/files:batchDelete",
+            ids,
+            "ids",
+            serde_json::json!({}),
+        )
     }
 
     /// Server-side "empty trash": one call clears everything, with none of
@@ -292,15 +282,13 @@ impl PikPak {
     }
 
     pub fn untrash(&self, ids: &[&str]) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:batchUntrash");
-
-        let payload = serde_json::json!({ "ids": ids });
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("untrash", rb)?;
-        ensure_success(response, "untrash")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "untrash",
+            "drive/v1/files:batchUntrash",
+            ids,
+            "ids",
+            serde_json::json!({}),
+        )
     }
 
     pub fn mkdir(&self, parent_id: &str, name: &str) -> Result<Entry> {
@@ -330,39 +318,37 @@ impl PikPak {
     }
 
     pub fn star(&self, ids: &[&str]) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:star");
-
-        let payload = serde_json::json!({ "ids": ids });
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("star", rb)?;
-        ensure_success(response, "star")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "star",
+            "drive/v1/files:star",
+            ids,
+            "ids",
+            serde_json::json!({}),
+        )
     }
 
     pub fn unstar(&self, ids: &[&str]) -> Result<()> {
-        let token = self.access_token()?;
-        let url = self.drive_url("drive/v1/files:unstar");
-
-        let payload = serde_json::json!({ "ids": ids });
-        let rb = self.http.post(&url).bearer_auth(&token).json(&payload);
-        let response = self.send_authed("unstar", rb)?;
-        ensure_success(response, "unstar")?;
-        self.clear_ls_cache();
-        Ok(())
+        self.batch_mutation(
+            "unstar",
+            "drive/v1/files:unstar",
+            ids,
+            "ids",
+            serde_json::json!({}),
+        )
     }
 
     pub fn starred_list(&self, limit: u32) -> Result<Vec<Entry>> {
         let token = self.access_token()?;
+        let thumbnail_size = self.thumbnail_size();
         let url = self.drive_url("drive/v1/files");
 
-        let filters = r#"{"trashed":{"eq":false},"system_tag":{"in":"STAR"}}"#;
+        let filters = r#"{"trashed":{"eq":false},"phase":{"eq":"PHASE_TYPE_COMPLETE"},"system_tag":{"in":"STAR"}}"#;
         let rb = self.http.get(&url).bearer_auth(&token).query(&[
             ("parent_id", "*"),
             ("limit", &limit.to_string()),
             ("filters", filters),
-            ("thumbnail_size", self.thumbnail_size.as_str()),
+            ("thumbnail_size", thumbnail_size.as_str()),
+            ("with_audit", "true"),
         ]);
         let response = self.send_authed("starred list", rb)?;
         let payload: DriveListResponse = json_or_api_error(response, "starred list")?;

@@ -11,15 +11,16 @@ use crate::theme;
 use super::completion::PathInput;
 use super::download::{DownloadTask, TaskStatus};
 use super::local_completion::LocalPathInput;
+use super::operations::{Destination, FileAction};
 use super::{
     App, AsyncRequestKind, InputMode, LoginField, NORMAL_ACTIONS, OpResult, PickerState,
-    PlayOption, PreviewState, handle_text_input, widgets,
+    PreviewState, handle_text_input, widgets,
 };
 
 /// Index of the last selectable Settings row. MUST match the item layout in
 /// `draw::draw_settings_overlay`, the index match in `handle_settings_key`, and
 /// the click map / `bool_items` in `handle_mouse_click` — keep all four in sync.
-const SETTINGS_LAST_INDEX: usize = 16;
+const SETTINGS_LAST_INDEX: usize = 23;
 const SETTINGS_COLOR_SCHEME_INDEX: usize = 2;
 const SETTINGS_IMAGE_PROTOCOL_INDEX: usize = 9;
 
@@ -97,7 +98,7 @@ impl App {
 
         // A pending play/goto response is only allowed to open its modal while
         // the user has not performed another action in the meantime.
-        if !matches!(&self.input, InputMode::InfoLoading) {
+        if !self.modal_request_survives_input() {
             self.invalidate_modal_request();
         }
 
@@ -413,24 +414,8 @@ impl App {
                 self.handle_my_shares_key(code, &mut shares, &mut selected, &mut confirm_delete);
                 Ok(false)
             }
-            InputMode::ConfirmPlay { name, url } => {
-                match code {
-                    KeyCode::Enter | KeyCode::Char('y') => {
-                        if let Some(player) = self.config.player.clone() {
-                            self.spawn_player(&player, &url, &name);
-                        } else {
-                            self.input = InputMode::PlayerInput {
-                                value: String::new(),
-                                pending_url: url,
-                                pending_name: name,
-                            };
-                        }
-                    }
-                    KeyCode::Esc | KeyCode::Char('n') => {}
-                    _ => {
-                        self.input = InputMode::ConfirmPlay { name, url };
-                    }
-                }
+            InputMode::ConfirmPlay { dialog } => {
+                self.handle_play_dialog_key(dialog, code);
                 Ok(false)
             }
             InputMode::PlayPicker {
@@ -440,67 +425,26 @@ impl App {
             } => {
                 match code {
                     KeyCode::Down | KeyCode::Char('j') => {
-                        let mut next = selected + 1;
-                        while next < medias.len() && !medias[next].available {
-                            next += 1;
-                        }
-                        if next < medias.len() {
-                            selected = next;
-                        }
-                        self.input = InputMode::PlayPicker {
-                            name,
-                            medias,
-                            selected,
-                        };
+                        selected = super::playback::move_selection(&medias, selected, false);
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
-                        if selected > 0 {
-                            let mut prev = selected - 1;
-                            while prev > 0 && !medias[prev].available {
-                                prev -= 1;
-                            }
-                            if medias[prev].available {
-                                selected = prev;
-                            }
-                        }
-                        self.input = InputMode::PlayPicker {
-                            name,
-                            medias,
-                            selected,
-                        };
+                        selected = super::playback::move_selection(&medias, selected, true);
                     }
                     KeyCode::Enter => {
-                        if let Some(opt) = medias.get(selected) {
-                            if opt.available {
-                                let url = opt.url.clone();
-                                if let Some(player) = self.config.player.clone() {
-                                    self.spawn_player(&player, &url, &name);
-                                } else {
-                                    self.input = InputMode::PlayerInput {
-                                        value: String::new(),
-                                        pending_url: url,
-                                        pending_name: name,
-                                    };
-                                }
-                            } else {
-                                self.push_log("Stream not available (cold storage)".into());
-                                self.input = InputMode::PlayPicker {
-                                    name,
-                                    medias,
-                                    selected,
-                                };
-                            }
+                        if let Some(option) = medias.get(selected)
+                            && self.launch_play_option(option, &name)
+                        {
+                            return Ok(false);
                         }
                     }
-                    KeyCode::Esc => {}
-                    _ => {
-                        self.input = InputMode::PlayPicker {
-                            name,
-                            medias,
-                            selected,
-                        };
-                    }
+                    KeyCode::Esc => return Ok(false),
+                    _ => {}
                 }
+                self.input = InputMode::PlayPicker {
+                    name,
+                    medias,
+                    selected,
+                };
                 Ok(false)
             }
             InputMode::PlayerInput {
@@ -536,6 +480,7 @@ impl App {
                 Ok(false)
             }
             InputMode::InfoLoading => {
+                self.input = InputMode::InfoLoading;
                 if code == KeyCode::Esc {
                     self.invalidate_modal_request();
                     if !self.trash_entries.is_empty() {
@@ -602,14 +547,9 @@ impl App {
                         if should_save {
                             match draft.save() {
                                 Ok(()) => {
-                                    self.config = draft;
-                                    self.resort_entries();
-                                    // Apply the new concurrency immediately (it's
-                                    // otherwise only read at startup) and let a
-                                    // raised limit start more workers now.
-                                    self.download_state.max_concurrent =
-                                        self.config.download_jobs.max(1);
-                                    self.download_state.start_next(&self.client);
+                                    if self.apply_settings(draft) {
+                                        self.refresh();
+                                    }
                                     self.push_log("Settings saved to config.toml".into());
                                     self.input = InputMode::Normal;
                                 }
@@ -712,14 +652,14 @@ impl App {
             }
             KeyCode::PageDown => {
                 if !self.entries.is_empty() {
-                    let page = self.list_area_height.get().max(1) as usize;
+                    let page = self.browser_page_size();
                     self.selected = (self.selected + page).min(self.entries.len() - 1);
                     self.on_cursor_move();
                 }
             }
             KeyCode::PageUp => {
                 if !self.entries.is_empty() {
-                    let page = self.list_area_height.get().max(1) as usize;
+                    let page = self.browser_page_size();
                     self.selected = self.selected.saturating_sub(page);
                     self.on_cursor_move();
                 }
@@ -748,40 +688,10 @@ impl App {
                     self.on_cursor_move();
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Right => {
                 if let Some(entry) = self.current_entry().cloned() {
                     if entry.kind == EntryKind::Folder {
-                        let cached_children =
-                            if self.preview_target_id.as_deref() == Some(&entry.id) {
-                                if let PreviewState::FolderListing(children) =
-                                    std::mem::replace(&mut self.preview_state, PreviewState::Empty)
-                                {
-                                    Some(children)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
-
-                        self.parent_entries = std::mem::take(&mut self.entries);
-                        self.parent_selected = self.selected;
-                        let old_id = std::mem::replace(&mut self.current_folder_id, entry.id);
-                        self.breadcrumb.push((old_id, entry.name));
-                        self.selected = 0;
-                        self.clear_preview();
-
-                        if let Some(children) = cached_children {
-                            self.invalidate_main_listing();
-                            self.finish_loading();
-                            self.entries = children;
-                            self.push_log(format!("Refreshed {}", self.current_path_display()));
-                            self.on_cursor_move();
-                        } else {
-                            self.loading = true;
-                            let fid = self.current_folder_id.clone();
-                            self.request_main_listing(fid);
-                        }
+                        self.enter_directory(entry);
                     } else if entry.kind == EntryKind::File
                         && theme::categorize(&entry) == theme::FileCategory::Video
                     {
@@ -796,38 +706,18 @@ impl App {
                     }
                 }
             }
-            KeyCode::Backspace => {
-                if let Some((parent_id, _)) = self.breadcrumb.pop() {
-                    let leaving_id = std::mem::replace(&mut self.current_folder_id, parent_id);
-                    self.invalidate_main_listing();
-                    self.finish_loading();
-                    let old_entries = std::mem::replace(
-                        &mut self.entries,
-                        std::mem::take(&mut self.parent_entries),
-                    );
-                    self.selected = self.parent_selected;
-
-                    if !self.entries.is_empty() && self.selected >= self.entries.len() {
-                        self.selected = self.entries.len() - 1;
-                    }
-
-                    if self.config.show_preview {
-                        self.preview_state = PreviewState::FolderListing(old_entries);
-                        self.preview_target_id = Some(leaving_id);
-                    } else {
-                        self.clear_preview();
-                    }
-                    self.pending_preview_fetch = false;
-
-                    if self.entries.is_empty() {
-                        // parent_entries was empty (async fetch hadn't completed),
-                        // do a full refresh to reload current directory
-                        self.refresh();
-                    } else {
-                        // Only need to fetch grandparent entries
-                        self.refresh_parent();
-                    }
-                }
+            KeyCode::Backspace | KeyCode::Left => self.leave_directory(),
+            KeyCode::Char('v') => {
+                self.config.inline_thumbnails = !self.config.inline_thumbnails;
+                self.save_browser_shortcut();
+            }
+            KeyCode::Char('[') => {
+                self.config.inline_thumbnail_size = self.config.inline_thumbnail_size.smaller();
+                self.save_browser_shortcut();
+            }
+            KeyCode::Char(']') => {
+                self.config.inline_thumbnail_size = self.config.inline_thumbnail_size.larger();
+                self.save_browser_shortcut();
             }
             KeyCode::Char('l') => {
                 self.show_logs_overlay = !self.show_logs_overlay;
@@ -854,7 +744,7 @@ impl App {
             KeyCode::Char('d') => {
                 if modifiers.contains(KeyModifiers::CONTROL) {
                     if !self.entries.is_empty() {
-                        let half = (self.list_area_height.get() / 2).max(1) as usize;
+                        let half = (self.browser_page_size() / 2).max(1);
                         self.selected = (self.selected + half).min(self.entries.len() - 1);
                         self.on_cursor_move();
                     }
@@ -920,7 +810,7 @@ impl App {
             KeyCode::Char('u') => {
                 if modifiers.contains(KeyModifiers::CONTROL) {
                     if !self.entries.is_empty() {
-                        let half = (self.list_area_height.get() / 2).max(1) as usize;
+                        let half = (self.browser_page_size() / 2).max(1);
                         self.selected = self.selected.saturating_sub(half);
                         self.on_cursor_move();
                     }
@@ -966,49 +856,7 @@ impl App {
                         let result = client.file_info(&eid);
                         let _ = tx.send(match result {
                             Ok(info) => {
-                                let mut options = Vec::new();
-                                if let Some(ref url) = info.web_content_link
-                                    && !url.is_empty()
-                                {
-                                    let size_str = info
-                                        .size
-                                        .as_deref()
-                                        .and_then(|s| s.parse::<u64>().ok())
-                                        .map(super::format_size)
-                                        .unwrap_or_default();
-                                    options.push(PlayOption {
-                                        label: format!("Original ({})", size_str),
-                                        url: url.clone(),
-                                        available: true,
-                                    });
-                                }
-                                if let Some(ref medias) = info.medias {
-                                    for m in medias {
-                                        if m.is_origin.unwrap_or(false) {
-                                            continue; // skip origin duplicate
-                                        }
-                                        let url = m
-                                            .link
-                                            .as_ref()
-                                            .and_then(|l| l.url.as_deref())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        if url.is_empty() {
-                                            continue;
-                                        }
-                                        let label = m
-                                            .media_name
-                                            .as_deref()
-                                            .unwrap_or("Unknown")
-                                            .to_string();
-                                        let available = client.check_stream_available(&url);
-                                        options.push(PlayOption {
-                                            label,
-                                            url,
-                                            available,
-                                        });
-                                    }
-                                }
+                                let options = info.play_options();
                                 OpResult::PlayPickerInfo(request, Ok((info, options)))
                             }
                             Err(e) => OpResult::PlayPickerInfo(request, Err(e)),
@@ -1063,12 +911,7 @@ impl App {
                     query: String::new(),
                 };
             }
-            KeyCode::Esc => {
-                if self.shares_pending {
-                    self.shares_pending = false;
-                    self.finish_loading();
-                }
-            }
+            KeyCode::Esc => {}
             _ => {}
         }
         Ok(false)
@@ -1388,14 +1231,8 @@ impl App {
     }
 
     fn execute_move_copy(&mut self, source: Entry, target: &str, is_move: bool) {
-        match self.client.resolve_path(target) {
-            Ok(dest_id) => {
-                self.spawn_move_copy(source, dest_id, target.to_string(), is_move);
-            }
-            Err(e) => {
-                self.push_log(format!("Invalid path: {e:#}"));
-            }
-        }
+        let destination = Destination::Path(target.to_owned());
+        self.queue_move_copy(source, destination, is_move);
     }
 
     fn spawn_move_copy(
@@ -1405,23 +1242,30 @@ impl App {
         dest_path: String,
         is_move: bool,
     ) {
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        let source_id = source.id;
-        let source_name = source.name;
-        let op = if is_move { "Move" } else { "Copy" };
-        self.loading = true;
-        std::thread::spawn(move || {
-            let result = if is_move {
-                client.mv(&[source_id.as_str()], &dest_id)
-            } else {
-                client.cp(&[source_id.as_str()], &dest_id)
-            };
-            let _ = tx.send(match result {
-                Ok(()) => OpResult::Ok(format!("{}d '{}' -> '{}'", op, source_name, dest_path)),
-                Err(e) => OpResult::Err(format!("{} failed: {e:#}", op)),
-            });
-        });
+        self.queue_move_copy(
+            source,
+            Destination::Folder {
+                id: dest_id,
+                path: dest_path,
+            },
+            is_move,
+        );
+    }
+
+    fn queue_move_copy(&mut self, source: Entry, destination: Destination, is_move: bool) {
+        let path = destination.display().to_owned();
+        let action = if is_move {
+            FileAction::Move(destination)
+        } else {
+            FileAction::Copy(destination)
+        };
+        let success = format!(
+            "{} '{}' -> '{}'",
+            action.completed_label(),
+            source.name,
+            path
+        );
+        self.spawn_file_mutation(action, vec![source.id], success, false);
     }
 
     pub(super) fn spawn_rename(&mut self, entry: Entry, new_name: String) {
@@ -1572,13 +1416,7 @@ impl App {
     }
 
     fn execute_cart_move_copy(&mut self, target: &str, is_move: bool) {
-        match self.client.resolve_path(target) {
-            Ok(dest_id) => self.spawn_cart_move_copy(dest_id, target.to_string(), is_move),
-            Err(e) => {
-                self.push_log(format!("Invalid path: {e:#}"));
-                self.input = InputMode::CartView;
-            }
-        }
+        self.queue_cart_move_copy(Destination::Path(target.to_owned()), is_move);
     }
 
     fn init_cart_picker(&mut self, is_move: bool) {
@@ -1610,34 +1448,30 @@ impl App {
     }
 
     fn spawn_cart_move_copy(&mut self, dest_id: String, dest_path: String, is_move: bool) {
-        let (ids, names): (Vec<String>, Vec<String>) = self
-            .cart
-            .iter()
-            .map(|e| (e.id.clone(), e.name.clone()))
-            .unzip();
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        let op = if is_move { "Move" } else { "Copy" };
-        let count = ids.len();
-        self.loading = true;
-        std::thread::spawn(move || {
-            let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            let result = if is_move {
-                client.mv(&id_refs, &dest_id)
-            } else {
-                client.cp(&id_refs, &dest_id)
-            };
-            let _ = tx.send(match result {
-                Ok(()) => OpResult::Ok(format!("{}d {} item(s) -> '{}'", op, count, dest_path)),
-                Err(e) => OpResult::Err(format!("{} failed: {e:#}", op)),
-            });
-        });
-        self.cart.clear();
-        self.cart_ids.clear();
-        self.cart_selected = 0;
-        for name in &names {
-            self.push_log(format!("  {}", name));
-        }
+        self.queue_cart_move_copy(
+            Destination::Folder {
+                id: dest_id,
+                path: dest_path,
+            },
+            is_move,
+        );
+    }
+
+    fn queue_cart_move_copy(&mut self, destination: Destination, is_move: bool) {
+        let path = destination.display().to_owned();
+        let ids = self.cart.iter().map(|e| e.id.clone()).collect();
+        let action = if is_move {
+            FileAction::Move(destination)
+        } else {
+            FileAction::Copy(destination)
+        };
+        let success = format!(
+            "{} {} item(s) -> '{}'",
+            action.completed_label(),
+            self.cart.len(),
+            path
+        );
+        self.spawn_file_mutation(action, ids, success, true);
     }
 
     fn handle_confirm_cart_delete_key(&mut self, code: KeyCode) {
@@ -1652,261 +1486,11 @@ impl App {
     }
 
     fn spawn_cart_delete(&mut self) {
-        let ids: Vec<String> = self.cart.iter().map(|e| e.id.clone()).collect();
-        let count = ids.len();
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        self.loading = true;
-        std::thread::spawn(move || {
-            let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            let _ = tx.send(match client.remove(&id_refs) {
-                Ok(()) => OpResult::Ok(format!("Trashed {} item(s)", count)),
-                Err(e) => OpResult::Err(format!("Trash failed: {e:#}")),
-            });
-        });
-        self.cart.clear();
-        self.cart_ids.clear();
-        self.cart_selected = 0;
+        let ids = self.cart.iter().map(|e| e.id.clone()).collect();
+        let success = format!("Trashed {} item(s)", self.cart.len());
+        self.spawn_file_mutation(FileAction::Trash, ids, success, true);
     }
 
-    fn handle_share_prompt_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Char('p') => {
-                self.spawn_create_shares(false);
-            }
-            KeyCode::Char('P') => {
-                self.spawn_create_shares(true);
-            }
-            _ => {
-                self.input = InputMode::CartView;
-            }
-        }
-    }
-
-    fn handle_share_created_view_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        shares: &mut Vec<(String, String, String)>,
-    ) {
-        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-        match code {
-            KeyCode::Esc if ctrl => {
-                shares.clear();
-                self.input = InputMode::CartView;
-            }
-            KeyCode::Esc => {
-                shares.pop();
-                if shares.is_empty() {
-                    self.input = InputMode::CartView;
-                } else {
-                    let owned = std::mem::take(shares);
-                    self.input = InputMode::ShareCreatedView { shares: owned };
-                }
-            }
-            KeyCode::Char('y') => {
-                if let Some((_, url, _)) = shares.last() {
-                    match write_clipboard(url) {
-                        Ok(()) => self.push_log(format!("Copied URL: {url}")),
-                        Err(e) => self.push_log(format!("Clipboard failed: {e:#}")),
-                    }
-                }
-                let owned = std::mem::take(shares);
-                self.input = InputMode::ShareCreatedView { shares: owned };
-            }
-            _ => {
-                let owned = std::mem::take(shares);
-                self.input = InputMode::ShareCreatedView { shares: owned };
-            }
-        }
-    }
-
-    fn spawn_create_shares(&mut self, need_password: bool) {
-        if self.cart.is_empty() {
-            self.input = InputMode::CartView;
-            return;
-        }
-        self.input = InputMode::ShareCreatedView { shares: vec![] };
-        for entry in &self.cart {
-            let client = Arc::clone(&self.client);
-            let tx = self.result_tx.clone();
-            let file_id = entry.id.clone();
-            let title = entry.name.clone();
-            std::thread::spawn(move || {
-                let result = client.create_share(&[file_id.as_str()], need_password, 0);
-                let msg = match result {
-                    Ok(resp) => {
-                        let url = resp.share_url.clone();
-                        let _ = write_clipboard(&url);
-                        OpResult::ShareCreated {
-                            title,
-                            url: resp.share_url,
-                            pass_code: resp.pass_code,
-                        }
-                    }
-                    Err(e) => OpResult::Err(format!("Share failed for '{title}': {e:#}")),
-                };
-                let _ = tx.send(msg);
-            });
-        }
-    }
-
-    fn handle_my_shares_key(
-        &mut self,
-        code: KeyCode,
-        shares: &mut Vec<crate::pikpak::MyShare>,
-        selected: &mut usize,
-        confirm_delete: &mut Option<String>,
-    ) {
-        if confirm_delete.is_some() {
-            match code {
-                KeyCode::Char('y') | KeyCode::Enter => {
-                    let Some(share_id) = confirm_delete.take() else {
-                        return;
-                    };
-                    let client = Arc::clone(&self.client);
-                    let tx = self.result_tx.clone();
-                    self.loading = true;
-                    // Restore mode before spawning so the view stays visible during load
-                    let owned_shares = std::mem::take(shares);
-                    let sel = *selected;
-                    self.input = InputMode::MySharesView {
-                        shares: owned_shares,
-                        selected: sel,
-                        confirm_delete: None,
-                    };
-                    std::thread::spawn(move || {
-                        let msg = match client.delete_shares(&[share_id.as_str()]) {
-                            Ok(()) => OpResult::MyShares(client.list_shares()),
-                            Err(e) => OpResult::Err(format!("Delete failed: {e:#}")),
-                        };
-                        let _ = tx.send(msg);
-                    });
-                }
-                _ => {
-                    *confirm_delete = None;
-                    let owned_shares = std::mem::take(shares);
-                    let sel = *selected;
-                    self.input = InputMode::MySharesView {
-                        shares: owned_shares,
-                        selected: sel,
-                        confirm_delete: None,
-                    };
-                }
-            }
-            return;
-        }
-
-        match code {
-            KeyCode::Esc => {
-                self.input = InputMode::Normal;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !shares.is_empty() {
-                    *selected = (*selected + 1).min(shares.len() - 1);
-                }
-                let owned = std::mem::take(shares);
-                let sel = *selected;
-                self.input = InputMode::MySharesView {
-                    shares: owned,
-                    selected: sel,
-                    confirm_delete: None,
-                };
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if *selected > 0 {
-                    *selected -= 1;
-                }
-                let owned = std::mem::take(shares);
-                let sel = *selected;
-                self.input = InputMode::MySharesView {
-                    shares: owned,
-                    selected: sel,
-                    confirm_delete: None,
-                };
-            }
-            KeyCode::Char('y') => {
-                if let Some(share) = shares.get(*selected) {
-                    let url = share.share_url.clone();
-                    match write_clipboard(&url) {
-                        Ok(()) => {
-                            self.push_log(format!("Copied: {url}"));
-                            self.show_logs_overlay = true;
-                        }
-                        Err(e) => {
-                            self.push_log(format!("Clipboard failed: {e:#}"));
-                            self.show_logs_overlay = true;
-                        }
-                    }
-                }
-                let owned = std::mem::take(shares);
-                let sel = *selected;
-                self.input = InputMode::MySharesView {
-                    shares: owned,
-                    selected: sel,
-                    confirm_delete: None,
-                };
-            }
-            KeyCode::Char('l') => {
-                self.show_logs_overlay = !self.show_logs_overlay;
-                let owned = std::mem::take(shares);
-                let sel = *selected;
-                self.input = InputMode::MySharesView {
-                    shares: owned,
-                    selected: sel,
-                    confirm_delete: None,
-                };
-            }
-            KeyCode::Char('d') | KeyCode::Char('x') => {
-                if let Some(share) = shares.get(*selected) {
-                    let id = share.share_id.clone();
-                    let owned = std::mem::take(shares);
-                    let sel = *selected;
-                    self.input = InputMode::MySharesView {
-                        shares: owned,
-                        selected: sel,
-                        confirm_delete: Some(id),
-                    };
-                } else {
-                    let owned = std::mem::take(shares);
-                    let sel = *selected;
-                    self.input = InputMode::MySharesView {
-                        shares: owned,
-                        selected: sel,
-                        confirm_delete: None,
-                    };
-                }
-            }
-            KeyCode::Char('r') => {
-                self.loading = true;
-                self.loading_label = Some("Loading shares...".into());
-                let client = Arc::clone(&self.client);
-                let tx = self.result_tx.clone();
-                let sel = *selected;
-                self.input = InputMode::MySharesView {
-                    shares: std::mem::take(shares),
-                    selected: sel,
-                    confirm_delete: None,
-                };
-                std::thread::spawn(move || {
-                    let _ = tx.send(OpResult::MyShares(client.list_shares()));
-                });
-            }
-            _ => {
-                let owned = std::mem::take(shares);
-                let sel = *selected;
-                self.input = InputMode::MySharesView {
-                    shares: owned,
-                    selected: sel,
-                    confirm_delete: None,
-                };
-            }
-        }
-    }
-
-    /// Process a key event on a local-path input field (tab-completion, navigation, typing).
-    /// Returns `Updated` for navigation/typing, `Confirmed(path)` on Enter with no candidate,
-    /// or `Cancelled` on Esc with no candidates open.
     fn apply_local_path_input_key(
         &mut self,
         code: KeyCode,
@@ -2238,24 +1822,9 @@ impl App {
     }
 
     fn spawn_star_toggle(&mut self, entry: Entry) {
-        let is_starred = entry.starred;
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        let eid = entry.id.clone();
-        let name = entry.name.clone();
-        self.loading = true;
-        std::thread::spawn(move || {
-            let result = if is_starred {
-                client.unstar(&[eid.as_str()])
-            } else {
-                client.star(&[eid.as_str()])
-            };
-            let op = if is_starred { "Unstarred" } else { "Starred" };
-            let _ = tx.send(match result {
-                Ok(()) => OpResult::Ok(format!("{} '{}'", op, name)),
-                Err(e) => OpResult::Err(format!("{} failed: {e:#}", op)),
-            });
-        });
+        let action = FileAction::Star(!entry.starred);
+        let success = format!("{} '{}'", action.completed_label(), entry.name);
+        self.spawn_file_mutation(action, vec![entry.id], success, false);
     }
 
     fn handle_offline_input_key(
@@ -2312,346 +1881,7 @@ impl App {
         });
     }
 
-    pub(super) fn open_offline_tasks_view(&mut self) {
-        self.input = InputMode::InfoLoading;
-        self.loading = true;
-        self.loading_label = Some("Loading offline tasks...".into());
-        let request = self.begin_modal_request(AsyncRequestKind::OfflineTasks, "offline-tasks");
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        std::thread::spawn(move || {
-            let phases = &[
-                "PHASE_TYPE_RUNNING",
-                "PHASE_TYPE_PENDING",
-                "PHASE_TYPE_COMPLETE",
-                "PHASE_TYPE_ERROR",
-            ];
-            let result = client.offline_list(50, phases).map(|r| r.tasks);
-            let _ = tx.send(OpResult::OfflineTasks(request, result));
-        });
-    }
-
-    fn handle_offline_tasks_key(
-        &mut self,
-        code: KeyCode,
-        tasks: &mut Vec<crate::pikpak::OfflineTask>,
-        selected: &mut usize,
-    ) {
-        match code {
-            KeyCode::Esc => {}
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !tasks.is_empty() {
-                    *selected = (*selected + 1).min(tasks.len() - 1);
-                }
-                self.input = InputMode::OfflineTasksView {
-                    tasks: std::mem::take(tasks),
-                    selected: *selected,
-                };
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if *selected > 0 {
-                    *selected -= 1;
-                }
-                self.input = InputMode::OfflineTasksView {
-                    tasks: std::mem::take(tasks),
-                    selected: *selected,
-                };
-            }
-            KeyCode::Char('r') => {
-                self.open_offline_tasks_view();
-            }
-            KeyCode::Char('R') => {
-                if let Some(task) = tasks.get(*selected)
-                    && task.phase == "PHASE_TYPE_ERROR"
-                {
-                    let client = Arc::clone(&self.client);
-                    let tx = self.result_tx.clone();
-                    let task_id = task.id.clone();
-                    let task_name = task.name.clone();
-                    self.input = InputMode::InfoLoading;
-                    self.loading = true;
-                    self.loading_label = Some("Retrying task...".into());
-                    std::thread::spawn(move || {
-                        let msg = match client.offline_task_retry(&task_id) {
-                            Ok(()) => format!("Retrying task: {}", task_name),
-                            Err(e) => format!("Retry failed: {e:#}"),
-                        };
-                        // OfflineOp reloads the task list, so the view returns
-                        // here instead of falling back to the file browser.
-                        let _ = tx.send(OpResult::OfflineOp(msg));
-                    });
-                    return;
-                }
-                self.input = InputMode::OfflineTasksView {
-                    tasks: std::mem::take(tasks),
-                    selected: *selected,
-                };
-            }
-            KeyCode::Char('x') => {
-                if let Some(task) = tasks.get(*selected) {
-                    let client = Arc::clone(&self.client);
-                    let tx = self.result_tx.clone();
-                    let task_id = task.id.clone();
-                    let task_name = task.name.clone();
-                    self.input = InputMode::InfoLoading;
-                    self.loading = true;
-                    self.loading_label = Some("Deleting task...".into());
-                    std::thread::spawn(move || {
-                        let msg = match client.delete_tasks(&[task_id.as_str()], false) {
-                            Ok(()) => format!("Deleted task: {}", task_name),
-                            Err(e) => format!("Delete task failed: {e:#}"),
-                        };
-                        let _ = tx.send(OpResult::OfflineOp(msg));
-                    });
-                    return;
-                }
-                self.input = InputMode::OfflineTasksView {
-                    tasks: std::mem::take(tasks),
-                    selected: *selected,
-                };
-            }
-            _ => {
-                self.input = InputMode::OfflineTasksView {
-                    tasks: std::mem::take(tasks),
-                    selected: *selected,
-                };
-            }
-        }
-    }
-
-    fn open_trash_view(&mut self) {
-        self.trash_entries.clear();
-        self.trash_selected = 0;
-        self.trash_expanded = false;
-        self.input = InputMode::TrashView {
-            entries: vec![],
-            selected: 0,
-            expanded: false,
-        };
-        self.loading = true;
-        self.loading_label = Some("Loading trash...".into());
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(OpResult::TrashList(client.ls_trash(200)));
-        });
-    }
-
-    fn handle_trash_view_key(
-        &mut self,
-        code: KeyCode,
-        entries: &mut Vec<Entry>,
-        selected: &mut usize,
-        expanded: bool,
-    ) {
-        if self.loading {
-            if matches!(code, KeyCode::Esc) {
-                self.finish_loading();
-            }
-            self.input = InputMode::TrashView {
-                entries: std::mem::take(entries),
-                selected: *selected,
-                expanded,
-            };
-            return;
-        }
-        match code {
-            KeyCode::Esc => {
-                if expanded {
-                    self.trash_expanded = false;
-                    self.input = InputMode::TrashView {
-                        entries: std::mem::take(entries),
-                        selected: *selected,
-                        expanded: false,
-                    };
-                } else {
-                    self.trash_entries.clear();
-                    self.trash_selected = 0;
-                    self.trash_expanded = false;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !entries.is_empty() {
-                    *selected = (*selected + 1).min(entries.len() - 1);
-                }
-                self.trash_selected = *selected;
-                self.input = InputMode::TrashView {
-                    entries: std::mem::take(entries),
-                    selected: *selected,
-                    expanded,
-                };
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if *selected > 0 {
-                    *selected -= 1;
-                }
-                self.trash_selected = *selected;
-                self.input = InputMode::TrashView {
-                    entries: std::mem::take(entries),
-                    selected: *selected,
-                    expanded,
-                };
-            }
-            KeyCode::Enter => {
-                let new_expanded = !expanded;
-                self.trash_expanded = new_expanded;
-                self.input = InputMode::TrashView {
-                    entries: std::mem::take(entries),
-                    selected: *selected,
-                    expanded: new_expanded,
-                };
-            }
-            KeyCode::Char('u') => {
-                if let Some(entry) = entries.get(*selected) {
-                    let client = Arc::clone(&self.client);
-                    let tx = self.result_tx.clone();
-                    let eid = entry.id.clone();
-                    let name = entry.name.clone();
-                    self.trash_entries = std::mem::take(entries);
-                    self.trash_selected = *selected;
-                    self.trash_expanded = expanded;
-                    self.input = InputMode::TrashView {
-                        entries: self.trash_entries.clone(),
-                        selected: *selected,
-                        expanded,
-                    };
-                    self.loading = true;
-                    self.loading_label = Some("Restoring...".into());
-                    std::thread::spawn(move || {
-                        let _ = tx.send(match client.untrash(&[eid.as_str()]) {
-                            Ok(()) => OpResult::TrashOp(format!("Restored '{}'", name)),
-                            Err(e) => OpResult::TrashOp(format!("Untrash failed: {e:#}")),
-                        });
-                    });
-                    return;
-                }
-                self.input = InputMode::TrashView {
-                    entries: std::mem::take(entries),
-                    selected: *selected,
-                    expanded,
-                };
-            }
-            KeyCode::Char('x') => {
-                if let Some(entry) = entries.get(*selected) {
-                    let client = Arc::clone(&self.client);
-                    let tx = self.result_tx.clone();
-                    let eid = entry.id.clone();
-                    let name = entry.name.clone();
-                    self.trash_entries = std::mem::take(entries);
-                    self.trash_selected = *selected;
-                    self.trash_expanded = expanded;
-                    self.input = InputMode::TrashView {
-                        entries: self.trash_entries.clone(),
-                        selected: *selected,
-                        expanded,
-                    };
-                    self.loading = true;
-                    self.loading_label = Some("Deleting...".into());
-                    std::thread::spawn(move || {
-                        let _ = tx.send(match client.delete_permanent(&[eid.as_str()]) {
-                            Ok(()) => OpResult::TrashOp(format!("Permanently deleted '{}'", name)),
-                            Err(e) => OpResult::TrashOp(format!("Permanent delete failed: {e:#}")),
-                        });
-                    });
-                    return;
-                }
-                self.input = InputMode::TrashView {
-                    entries: std::mem::take(entries),
-                    selected: *selected,
-                    expanded,
-                };
-            }
-            KeyCode::Char(' ') => {
-                if let Some(entry) = entries.get(*selected).cloned() {
-                    self.trash_entries = std::mem::take(entries);
-                    self.trash_selected = *selected;
-                    self.trash_expanded = expanded;
-                    let info = crate::pikpak::FileInfoResponse {
-                        id: Some(entry.id),
-                        name: entry.name,
-                        kind: Some(match entry.kind {
-                            crate::pikpak::EntryKind::Folder => "drive#folder".to_string(),
-                            crate::pikpak::EntryKind::File => "drive#file".to_string(),
-                        }),
-                        size: if entry.size > 0 {
-                            Some(entry.size.to_string())
-                        } else {
-                            None
-                        },
-                        hash: None,
-                        mime_type: None,
-                        created_time: if entry.created_time.is_empty() {
-                            None
-                        } else {
-                            Some(entry.created_time)
-                        },
-                        modified_time: if entry.modified_time.is_empty() {
-                            None
-                        } else {
-                            Some(entry.modified_time)
-                        },
-                        web_content_link: None,
-                        thumbnail_link: entry.thumbnail_link,
-                        links: None,
-                        medias: None,
-                    };
-                    let thumb_url = info.thumbnail_link.clone().filter(|u| !u.is_empty());
-                    let has_thumbnail = thumb_url.is_some();
-                    let target_id = info.id.clone().unwrap_or_default();
-                    let request =
-                        self.begin_modal_request(AsyncRequestKind::Info, target_id.clone());
-                    self.input = InputMode::InfoView {
-                        request_id: request.id,
-                        target_id,
-                        info,
-                        image: None,
-                        has_thumbnail,
-                    };
-                    if let Some(url) = thumb_url {
-                        self.spawn_thumbnail_fetch(url, move |result| {
-                            super::OpResult::InfoThumbnail(request, result)
-                        });
-                    } else {
-                        self.modal_request = None;
-                    }
-                } else {
-                    self.input = InputMode::TrashView {
-                        entries: std::mem::take(entries),
-                        selected: *selected,
-                        expanded,
-                    };
-                }
-            }
-            KeyCode::Char('r') => {
-                self.trash_expanded = expanded;
-                self.open_trash_view_preserve_expanded();
-            }
-            _ => {
-                self.input = InputMode::TrashView {
-                    entries: std::mem::take(entries),
-                    selected: *selected,
-                    expanded,
-                };
-            }
-        }
-    }
-
-    fn open_trash_view_preserve_expanded(&mut self) {
-        self.input = InputMode::TrashView {
-            entries: self.trash_entries.clone(),
-            selected: self.trash_selected,
-            expanded: self.trash_expanded,
-        };
-        self.loading = true;
-        self.loading_label = Some("Loading trash...".into());
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(OpResult::TrashList(client.ls_trash(200)));
-        });
-    }
-
-    fn open_info_popup(&mut self, entry: Entry) {
+    pub(super) fn open_info_popup(&mut self, entry: Entry) {
         self.input = InputMode::InfoLoading;
         self.loading = true;
         self.loading_label = Some("Loading file info...".into());
@@ -2684,52 +1914,9 @@ impl App {
         });
     }
 
-    fn spawn_player(&mut self, cmd: &str, url: &str, name: &str) {
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        let parent_id = self.current_folder_id.clone();
-        let (cmd, url, name) = (cmd.to_owned(), url.to_owned(), name.to_owned());
-        // Subtitle API calls and the player's lifetime must not block the UI.
-        std::thread::spawn(move || {
-            let result = crate::playback::prepare_player(&client, &cmd, &parent_id, &name, &url)
-                .and_then(|mut command| command.spawn().map_err(anyhow::Error::from));
-            match result {
-                Ok(mut child) => {
-                    let _ = tx.send(OpResult::PlayerLog(format!(
-                        "Launched {cmd} with video URL"
-                    )));
-                    match child.wait() {
-                        Ok(status) if !status.success() => {
-                            let _ = tx
-                                .send(OpResult::PlayerLog(format!("Player exited with {status}")));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(OpResult::PlayerLog(format!("Player error: {e}")));
-                        }
-                        _ => {}
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(OpResult::PlayerLog(format!(
-                        "Failed to launch {cmd}: {e:#}"
-                    )));
-                }
-            }
-        });
-    }
-
     pub(super) fn spawn_delete(&mut self, entry: Entry) {
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        let eid = entry.id.clone();
-        let name = entry.name.clone();
-        self.loading = true;
-        std::thread::spawn(move || {
-            let _ = tx.send(match client.remove(&[eid.as_str()]) {
-                Ok(()) => OpResult::Ok(format!("Removed '{}' (to trash)", name)),
-                Err(e) => OpResult::Err(format!("Remove failed: {e:#}")),
-            });
-        });
+        let success = format!("Removed '{}' (to trash)", entry.name);
+        self.spawn_file_mutation(FileAction::Trash, vec![entry.id], success, false);
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -2749,7 +1936,7 @@ impl App {
             }
             return;
         }
-        if !matches!(&self.input, InputMode::InfoLoading) {
+        if !self.modal_request_survives_input() {
             self.invalidate_modal_request();
         }
         match mouse.kind {
@@ -2797,45 +1984,7 @@ impl App {
                 }
                 return;
             }
-            if self.is_in_rect(col, row, self.current_pane_area.get()) {
-                // A few rows per wheel notch (like the logs pane) feels right in
-                // big folders; refresh the preview only once after the jump.
-                const WHEEL_STEP: usize = 3;
-                let new = if up {
-                    self.selected.saturating_sub(WHEEL_STEP)
-                } else if self.entries.is_empty() {
-                    0
-                } else {
-                    (self.selected + WHEEL_STEP).min(self.entries.len() - 1)
-                };
-                if new != self.selected {
-                    self.selected = new;
-                    self.on_cursor_move();
-                }
-            } else if self.is_in_rect(col, row, self.parent_pane_area.get()) {
-                const WHEEL_STEP: usize = 3;
-                if up {
-                    self.parent_selected = self.parent_selected.saturating_sub(WHEEL_STEP);
-                } else if !self.parent_entries.is_empty() {
-                    self.parent_selected =
-                        (self.parent_selected + WHEEL_STEP).min(self.parent_entries.len() - 1);
-                }
-            } else if self.is_in_rect(col, row, self.preview_pane_area.get()) {
-                let area = self.preview_pane_area.get();
-                let visible = area.height.saturating_sub(2) as usize;
-                let max_scroll = match &self.preview_state {
-                    PreviewState::FileTextPreview { lines, .. } => {
-                        lines.len().saturating_sub(visible)
-                    }
-                    PreviewState::FolderListing(children) => children.len().saturating_sub(visible),
-                    _ => 0,
-                };
-                if up {
-                    self.preview_scroll = self.preview_scroll.saturating_sub(1);
-                } else if self.preview_scroll < max_scroll {
-                    self.preview_scroll += 1;
-                }
-            }
+            self.handle_browser_scroll(col, row, up);
             return;
         }
 
@@ -2895,15 +2044,15 @@ impl App {
             } else if !shares.is_empty() {
                 *selected = (*selected + 1).min(shares.len() - 1);
             }
+        } else if let InputMode::ConfirmPlay { dialog } = &mut self.input {
+            if let Some(cursor) = &mut dialog.quality_cursor {
+                *cursor = super::playback::move_selection(&dialog.medias, *cursor, up);
+            }
         } else if let InputMode::PlayPicker {
             medias, selected, ..
         } = &mut self.input
         {
-            if up {
-                *selected = selected.saturating_sub(1);
-            } else if !medias.is_empty() {
-                *selected = (*selected + 1).min(medias.len() - 1);
-            }
+            *selected = super::playback::move_selection(medias, *selected, up);
         } else if let InputMode::CustomColorSettings { selected, .. } = &mut self.input {
             if up {
                 *selected = selected.saturating_sub(1);
@@ -2943,6 +2092,10 @@ impl App {
             return;
         }
 
+        if matches!(self.input, InputMode::ConfirmPlay { .. }) {
+            self.handle_play_dialog_click(col, row);
+            return;
+        }
         let mouse_list_area = self.mouse_list_area.get();
         let first_row = self.mouse_list_first_row.get();
         let visible = self.mouse_list_visible.get();
@@ -2988,8 +2141,10 @@ impl App {
                 InputMode::PlayPicker {
                     medias, selected, ..
                 } if clicked_idx < medias.len() => {
-                    *selected = clicked_idx;
-                    activate = double;
+                    if medias[clicked_idx].available {
+                        *selected = clicked_idx;
+                        activate = double;
+                    }
                 }
                 InputMode::CustomColorSettings { selected, .. } if clicked_idx < 8 => {
                     *selected = clicked_idx;
@@ -3070,10 +2225,13 @@ impl App {
                                 6 => draft.lazy_preview = !draft.lazy_preview,
                                 11 => draft.sort_reverse = !draft.sort_reverse,
                                 13 => draft.cli_nerd_font = !draft.cli_nerd_font,
+                                20 => draft.inline_thumbnails = !draft.inline_thumbnails,
+                                22 => draft.thumbnail_placeholders = !draft.thumbnail_placeholders,
                                 _ => {}
                             }
                             modified = true;
                         } else if double {
+                            self.settings_number_input.clear();
                             editing = true;
                         }
                     }
@@ -3092,82 +2250,16 @@ impl App {
             return;
         }
 
-        let current_area = self.current_pane_area.get();
-        let parent_area = self.parent_pane_area.get();
-        let preview_area = self.preview_pane_area.get();
-
-        if self.is_in_content(col, row, current_area) {
-            let content_y = (row - (current_area.y + 1)) as usize;
-            let offset = self.scroll_offset.get();
-            let clicked_idx = offset + content_y;
-            if clicked_idx < self.entries.len() {
-                self.selected = clicked_idx;
-                self.on_cursor_move();
-                if double {
-                    let _ = self.handle_normal_key(KeyCode::Enter, KeyModifiers::NONE);
-                }
-            }
-        } else if self.is_in_content(col, row, parent_area) {
-            let content_y = (row - (parent_area.y + 1)) as usize;
-            let offset = self.parent_scroll_offset.get();
-            let clicked_idx = offset + content_y;
-            if clicked_idx < self.parent_entries.len() {
-                self.parent_selected = clicked_idx;
-                if double {
-                    let _ = self.handle_normal_key(KeyCode::Backspace, KeyModifiers::NONE);
-                    let is_folder = self
-                        .entries
-                        .get(self.selected)
-                        .is_some_and(|e| e.kind == EntryKind::Folder);
-                    if is_folder {
-                        let _ = self.handle_normal_key(KeyCode::Enter, KeyModifiers::NONE);
-                    }
-                }
-            }
-        } else if self.is_in_rect(col, row, preview_area) && double {
-            let is_folder = self
-                .entries
-                .get(self.selected)
-                .is_some_and(|e| e.kind == EntryKind::Folder);
-            let has_entry = self.selected < self.entries.len();
-            if has_entry {
-                if is_folder {
-                    let _ = self.handle_normal_key(KeyCode::Enter, KeyModifiers::NONE);
-                } else {
-                    let _ = self.handle_normal_key(KeyCode::Char(' '), KeyModifiers::NONE);
-                }
-            }
-        }
+        self.handle_browser_click(col, row, double);
     }
 
     fn is_in_rect(&self, col: u16, row: u16, rect: ratatui::layout::Rect) -> bool {
-        col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
-    }
-
-    /// Like `is_in_rect` but excluding the 1-cell border: a click on the top
-    /// border must not select the first row, nor the bottom border a row past
-    /// the visible window.
-    fn is_in_content(&self, col: u16, row: u16, rect: ratatui::layout::Rect) -> bool {
-        rect.width > 2
-            && rect.height > 2
-            && col > rect.x
-            && col < rect.x + rect.width - 1
-            && row > rect.y
-            && row < rect.y + rect.height - 1
+        rect.contains((col, row).into())
     }
 
     pub(super) fn spawn_permanent_delete(&mut self, entry: Entry) {
-        let client = Arc::clone(&self.client);
-        let tx = self.result_tx.clone();
-        let eid = entry.id.clone();
-        let name = entry.name.clone();
-        self.loading = true;
-        std::thread::spawn(move || {
-            let _ = tx.send(match client.delete_permanent(&[eid.as_str()]) {
-                Ok(()) => OpResult::Ok(format!("Permanently deleted '{}'", name)),
-                Err(e) => OpResult::Err(format!("Permanent delete failed: {e:#}")),
-            });
-        });
+        let success = format!("Permanently deleted '{}'", entry.name);
+        self.spawn_file_mutation(FileAction::Delete, vec![entry.id], success, false);
     }
 
     #[allow(clippy::collapsible_match)]
@@ -3725,6 +2817,18 @@ impl App {
                     }
                 },
                 15 => match code {
+                    KeyCode::Right | KeyCode::Char('+') => {
+                        draft.playback_quality = draft.playback_quality.next();
+                        *modified = true;
+                    }
+                    KeyCode::Left | KeyCode::Char('-') => {
+                        draft.playback_quality = draft.playback_quality.prev();
+                        *modified = true;
+                    }
+                    KeyCode::Enter | KeyCode::Esc => *editing = false,
+                    _ => {}
+                },
+                16 => match code {
                     KeyCode::Char('+') | KeyCode::Up | KeyCode::Right => {
                         draft.download_jobs = (draft.download_jobs + 1).min(16);
                         *modified = true;
@@ -3738,7 +2842,7 @@ impl App {
                     }
                     _ => {}
                 },
-                16 => match code {
+                17 => match code {
                     KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('l') => {
                         draft.update_check = draft.update_check.next();
                         *modified = true;
@@ -3750,6 +2854,129 @@ impl App {
                     KeyCode::Enter | KeyCode::Esc => {
                         *editing = false;
                     }
+                    _ => {}
+                },
+                18 => match code {
+                    KeyCode::Char('a') => {
+                        draft.columns = crate::config::ColumnCount::Auto;
+                        self.settings_number_input.clear();
+                        *modified = true;
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        self.settings_number_input.push(c);
+                        if let Ok(count) = self.settings_number_input.parse::<usize>()
+                            && count > 0
+                        {
+                            draft.columns = crate::config::ColumnCount::Fixed(count);
+                            *modified = true;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.settings_number_input.pop();
+                        draft.columns = self
+                            .settings_number_input
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|count| *count > 0)
+                            .map(crate::config::ColumnCount::Fixed)
+                            .unwrap_or(crate::config::ColumnCount::Auto);
+                        *modified = true;
+                    }
+                    KeyCode::Right | KeyCode::Char('+') => {
+                        draft.columns = match draft.columns {
+                            crate::config::ColumnCount::Auto => {
+                                crate::config::ColumnCount::Fixed(3)
+                            }
+                            crate::config::ColumnCount::Fixed(n) => {
+                                crate::config::ColumnCount::Fixed(n.saturating_add(1))
+                            }
+                        };
+                        self.settings_number_input.clear();
+                        *modified = true;
+                    }
+                    KeyCode::Left | KeyCode::Char('-') => {
+                        draft.columns = match draft.columns {
+                            crate::config::ColumnCount::Fixed(n) if n > 1 => {
+                                crate::config::ColumnCount::Fixed(n - 1)
+                            }
+                            _ => crate::config::ColumnCount::Auto,
+                        };
+                        self.settings_number_input.clear();
+                        *modified = true;
+                    }
+                    KeyCode::Enter | KeyCode::Esc => *editing = false,
+                    _ => {}
+                },
+                19 => match code {
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        self.settings_number_input.push(c);
+                        if let Ok(width) = self.settings_number_input.parse::<u16>() {
+                            draft.column_min_width = width.max(16);
+                            *modified = true;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.settings_number_input.pop();
+                        draft.column_min_width = self
+                            .settings_number_input
+                            .parse::<u16>()
+                            .unwrap_or(28)
+                            .max(16);
+                        *modified = true;
+                    }
+                    KeyCode::Right | KeyCode::Char('+') => {
+                        draft.column_min_width = draft.column_min_width.saturating_add(1).max(16);
+                        self.settings_number_input.clear();
+                        *modified = true;
+                    }
+                    KeyCode::Left | KeyCode::Char('-') => {
+                        draft.column_min_width = draft.column_min_width.saturating_sub(1).max(16);
+                        self.settings_number_input.clear();
+                        *modified = true;
+                    }
+                    KeyCode::Enter | KeyCode::Esc => *editing = false,
+                    _ => {}
+                },
+                20 => match code {
+                    KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Left | KeyCode::Right => {
+                        draft.inline_thumbnails = !draft.inline_thumbnails;
+                        *modified = true;
+                        *editing = false;
+                    }
+                    KeyCode::Esc => *editing = false,
+                    _ => {}
+                },
+                21 => match code {
+                    KeyCode::Right | KeyCode::Char('+') | KeyCode::Char(']') => {
+                        draft.inline_thumbnail_size = draft.inline_thumbnail_size.larger();
+                        *modified = true;
+                    }
+                    KeyCode::Left | KeyCode::Char('-') | KeyCode::Char('[') => {
+                        draft.inline_thumbnail_size = draft.inline_thumbnail_size.smaller();
+                        *modified = true;
+                    }
+                    KeyCode::Enter | KeyCode::Esc => *editing = false,
+                    _ => {}
+                },
+                22 => match code {
+                    KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Left | KeyCode::Right => {
+                        draft.thumbnail_placeholders = !draft.thumbnail_placeholders;
+                        *modified = true;
+                        *editing = false;
+                    }
+                    KeyCode::Esc => *editing = false,
+                    _ => {}
+                },
+                23 => match code {
+                    KeyCode::Right | KeyCode::Char('+') => {
+                        draft.thumbnail_size = draft.thumbnail_size.next();
+                        *modified = true;
+                    }
+                    KeyCode::Left | KeyCode::Char('-') => {
+                        draft.thumbnail_size = draft.thumbnail_size.prev();
+                        *modified = true;
+                    }
+                    KeyCode::Enter | KeyCode::Esc => *editing = false,
                     _ => {}
                 },
                 _ => {}
@@ -3786,6 +3013,7 @@ impl App {
                     if *selected == 14 {
                         self.text_cursor = draft.player.as_ref().map_or(0, String::len);
                     }
+                    self.settings_number_input.clear();
                     *editing = true;
                     None
                 }
@@ -3804,7 +3032,7 @@ impl App {
 }
 
 /// Write `text` to the system clipboard using the best available tool.
-fn write_clipboard(text: &str) -> anyhow::Result<()> {
+pub(super) fn write_clipboard(text: &str) -> anyhow::Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -3852,5 +3080,173 @@ mod mouse_list_tests {
         assert_eq!(mouse_list_index(9, 7, area, 7, 0, 3), None);
         assert_eq!(mouse_list_index(12, 6, area, 7, 0, 3), None);
         assert_eq!(mouse_list_index(12, 10, area, 7, 0, 3), None);
+    }
+}
+
+#[cfg(test)]
+mod browser_settings_tests {
+    use super::*;
+    use crate::config::{ColumnCount, InlineThumbnailSize, TuiConfig};
+    use crate::pikpak::PikPak;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn numeric_settings_accept_multi_digit_values_and_reset_between_fields() {
+        let mut app = App::new_login(PikPak::new().unwrap(), None, TuiConfig::default());
+        app.input = InputMode::Settings {
+            selected: 18,
+            editing: false,
+            draft: TuiConfig::default(),
+            modified: false,
+        };
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Char('1'),
+            KeyCode::Char('3'),
+            KeyCode::Backspace,
+            KeyCode::Char('2'),
+            KeyCode::Enter,
+        ] {
+            app.handle_key(code, KeyModifiers::NONE).unwrap();
+        }
+        assert!(
+            matches!(&app.input, InputMode::Settings { draft, modified: true, .. } if draft.columns == ColumnCount::Fixed(12))
+        );
+        for code in [
+            KeyCode::Down,
+            KeyCode::Enter,
+            KeyCode::Char('3'),
+            KeyCode::Char('2'),
+            KeyCode::Enter,
+        ] {
+            app.handle_key(code, KeyModifiers::NONE).unwrap();
+        }
+        assert!(
+            matches!(&app.input, InputMode::Settings { draft, .. } if draft.column_min_width == 32 && draft.columns == ColumnCount::Fixed(12))
+        );
+        // Changes stay in the draft until the existing Save action is used.
+        assert_eq!(app.config.columns, ColumnCount::Auto);
+    }
+
+    #[test]
+    fn new_thumbnail_checkbox_uses_the_rendered_settings_hit_map() {
+        let mut app = App::new_login(PikPak::new().unwrap(), None, TuiConfig::default());
+        app.input = InputMode::Settings {
+            selected: 20,
+            editing: false,
+            draft: TuiConfig::default(),
+            modified: false,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let area = app.settings_area.get();
+        let categories = App::settings_items(&app.config);
+        let counts: Vec<_> = categories.iter().map(|(_, items)| items.len()).collect();
+        let lines = widgets::settings_item_line_map(&counts);
+        assert_eq!(lines.len() - 1, SETTINGS_LAST_INDEX);
+        let (y, row) = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(100)
+            .enumerate()
+            .find(|(_, row)| {
+                row.iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+                    .contains("Inline Thumbnails")
+            })
+            .unwrap();
+        let x = row
+            .windows(3)
+            .position(|cells| {
+                cells[0].symbol() == "[" && cells[1].symbol() == "✓" && cells[2].symbol() == "]"
+            })
+            .unwrap();
+        assert!(area.contains((x as u16, y as u16).into()));
+        app.handle_mouse_click(x as u16, y as u16, false);
+        assert!(
+            matches!(&app.input, InputMode::Settings { draft, modified: true, .. } if !draft.inline_thumbnails)
+        );
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert!(
+            matches!(&app.input, InputMode::Settings { draft, .. } if draft.inline_thumbnail_size == InlineThumbnailSize::Small)
+        );
+    }
+
+    #[test]
+    fn placeholder_and_source_size_edits_stay_in_draft_then_apply_to_shared_client() {
+        let mut app = App::new_login(PikPak::new().unwrap(), None, TuiConfig::default());
+        let worker_client = Arc::clone(&app.client);
+        app.input = InputMode::Settings {
+            selected: 22,
+            editing: false,
+            draft: TuiConfig::default(),
+            modified: false,
+        };
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Down,
+            KeyCode::Enter,
+            KeyCode::Right,
+            KeyCode::Enter,
+        ] {
+            app.handle_key(code, KeyModifiers::NONE).unwrap();
+        }
+        let InputMode::Settings {
+            draft, modified, ..
+        } = &app.input
+        else {
+            panic!("settings closed");
+        };
+        assert!(*modified);
+        assert!(!draft.thumbnail_placeholders);
+        assert_eq!(draft.thumbnail_size, crate::config::ThumbnailSize::Large);
+        assert!(app.config.thumbnail_placeholders);
+        assert_eq!(worker_client.thumbnail_size(), "SIZE_MEDIUM");
+        let saved = draft.clone();
+        assert!(app.apply_settings(saved.clone()));
+        assert!(!app.config.thumbnail_placeholders);
+        assert_eq!(worker_client.thumbnail_size(), "SIZE_LARGE");
+        assert!(!app.apply_settings(saved));
+    }
+
+    #[test]
+    fn placeholder_checkbox_uses_scrolled_mouse_hit_map() {
+        let mut app = App::new_login(PikPak::new().unwrap(), None, TuiConfig::default());
+        app.input = InputMode::Settings {
+            selected: 22,
+            editing: false,
+            draft: TuiConfig::default(),
+            modified: false,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let (y, row) = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(100)
+            .enumerate()
+            .find(|(_, row)| {
+                row.iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+                    .contains("Thumbnail Placeholders")
+            })
+            .unwrap();
+        let x = row
+            .windows(3)
+            .position(|cells| {
+                cells[0].symbol() == "[" && cells[1].symbol() == "✓" && cells[2].symbol() == "]"
+            })
+            .unwrap();
+        app.handle_mouse_click(x as u16, y as u16, false);
+        assert!(
+            matches!(&app.input, InputMode::Settings { selected: 22, draft, modified: true, .. } if !draft.thumbnail_placeholders)
+        );
     }
 }

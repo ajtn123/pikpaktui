@@ -1,6 +1,6 @@
 [package]
 name = "pikpaktui"
-version = "0.0.58"
+version = "0.0.60"
 edition = "2024"
 rust-version = "1.90"
 description = "A TUI and CLI client for PikPak cloud storage"
@@ -11,7 +11,10 @@ documentation = "https://app.snaix.homes/pikpaktui/"
 keywords = ["tui", "pikpak", "cloud-storage", "cli"]
 categories = ["command-line-utilities"]
 include = [
-    "/src/**",
+    "/src/**/*.rs",
+    "/docs/configuration.md",
+    "/docs/zh/configuration.md",
+    "/docs/zh-Hant/configuration.md",
     "/Cargo.toml",
     "/Cargo.lock",
     "/LICENSE",
@@ -21,7 +24,7 @@ include = [
 [dependencies]
 anyhow = "1"
 crossterm = "0.29"
-ratatui = "0.30.0"
+ratatui = "0.30.2"
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 
-use crate::pikpak::PikPak;
+use crate::pikpak::PlayOption;
 
 const USAGE: &str = "Usage: pikpaktui play [options] <path> | --recent\n\n\
     -r, --recent             Play the newest added video on the first events page\n\
@@ -63,60 +63,6 @@ fn parse_args(args: &[String]) -> Result<PlayArgs<'_>> {
     Ok(parsed)
 }
 
-#[derive(Debug)]
-struct PlayOption {
-    label: String,
-    url: String,
-    available: bool,
-}
-
-fn build_play_options(client: &PikPak, file_id: &str) -> Result<Vec<PlayOption>> {
-    let info = client.file_info(file_id)?;
-    let mut options = Vec::new();
-
-    if let Some(ref url) = info.web_content_link
-        && !url.is_empty()
-    {
-        let size_str = info
-            .size
-            .as_deref()
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(super::format_size)
-            .unwrap_or_default();
-        options.push(PlayOption {
-            label: format!("original ({})", size_str),
-            url: url.clone(),
-            available: true,
-        });
-    }
-
-    if let Some(ref medias) = info.medias {
-        for m in medias {
-            if m.is_origin.unwrap_or(false) {
-                continue;
-            }
-            let url = m
-                .link
-                .as_ref()
-                .and_then(|l| l.url.as_deref())
-                .unwrap_or("")
-                .to_string();
-            if url.is_empty() {
-                continue;
-            }
-            let label = m.media_name.as_deref().unwrap_or("unknown").to_string();
-            let available = client.check_stream_available(&url);
-            options.push(PlayOption {
-                label,
-                url,
-                available,
-            });
-        }
-    }
-
-    Ok(options)
-}
-
 fn select_stream<'a>(options: &'a [PlayOption], quality: &str) -> Result<&'a PlayOption> {
     let selected = if let Ok(num) = quality.parse::<usize>() {
         if num == 0 || num > options.len() {
@@ -155,8 +101,9 @@ fn select_stream<'a>(options: &'a [PlayOption], quality: &str) -> Result<&'a Pla
     };
     if !selected.available {
         return Err(anyhow!(
-            "stream '{}' is not available (cold storage)",
-            selected.label
+            "stream '{}' is not available: {}",
+            selected.label,
+            selected.unavailable_reason.unwrap_or("unavailable")
         ));
     }
     Ok(selected)
@@ -176,15 +123,18 @@ pub fn run(args: &[String]) -> Result<()> {
             .ok_or_else(|| anyhow!("no videos found on the first page of recent events"))?
     };
 
-    let options = build_play_options(&client, &entry.id)?;
+    let options = client.file_info(&entry.id)?.play_options();
     if options.is_empty() {
         return Err(anyhow!("no playable streams found for '{}'", entry.name));
     }
     if args.list_stream {
         println!("Available streams for '{}':", entry.name);
         for (i, opt) in options.iter().enumerate() {
-            let status = if opt.available { "" } else { " (unavailable)" };
-            println!("  {}. {}{}", i + 1, opt.label, status);
+            let status = opt
+                .unavailable_reason
+                .map(|reason| format!(" ({reason})"))
+                .unwrap_or_default();
+            println!("  {}. {}{}", i + 1, opt.display_label(), status);
         }
         println!();
         if let Some(path) = args.path {
@@ -310,6 +260,9 @@ mod tests {
             label: label.into(),
             url: format!("https://example.com/{label}"),
             available,
+            unavailable_reason: (!available).then_some("additional playback quota required"),
+            is_original: label.starts_with("original"),
+            height: None,
         })
         .collect()
     }
@@ -337,7 +290,7 @@ mod tests {
                 select_stream(&options, quality)
                     .unwrap_err()
                     .to_string()
-                    .contains("cold storage")
+                    .contains("additional playback quota required")
             );
         }
         for (quality, error) in [
@@ -353,5 +306,63 @@ mod tests {
                     .contains(error)
             );
         }
+    }
+
+    #[test]
+    fn uses_shared_media_visibility_and_availability_for_cli_selection() {
+        let info: crate::pikpak::FileInfoResponse = serde_json::from_value(serde_json::json!({
+            "name": "movie.mkv",
+            "web_content_link": "https://example.com/download",
+            "medias": [
+                {
+                    "media_name": "720p",
+                    "is_visible": true,
+                    "link": { "url": "https://example.com/720p" }
+                },
+                {
+                    "media_name": "source",
+                    "is_origin": true,
+                    "is_visible": true,
+                    "need_more_quota": true,
+                    "link": { "url": "https://example.com/original" }
+                },
+                {
+                    "media_name": "1080p",
+                    "is_visible": false,
+                    "link": { "url": "https://example.com/hidden" }
+                },
+                { "media_name": "4k", "is_visible": true }
+            ]
+        }))
+        .unwrap();
+        let options = info.play_options();
+
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].label, "Original");
+        assert_eq!(
+            select_stream(&options, "720p").unwrap().url,
+            "https://example.com/720p"
+        );
+        assert_eq!(select_stream(&options, "2").unwrap().label, "720p");
+        for quality in ["original", "1"] {
+            assert!(
+                select_stream(&options, quality)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("additional playback quota required")
+            );
+        }
+        assert!(
+            select_stream(&options, "1080p")
+                .unwrap_err()
+                .to_string()
+                .contains("no stream matching")
+        );
+        assert!(
+            select_stream(&options, "4k")
+                .unwrap_err()
+                .to_string()
+                .contains("media link not ready; refresh to retry")
+        );
     }
 }

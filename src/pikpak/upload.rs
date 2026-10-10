@@ -3,7 +3,6 @@ use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha1::Sha1;
-use std::fmt::Write as _;
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;
@@ -100,6 +99,9 @@ impl PikPak {
         self.oss_complete_multipart(&oss_args, &upload_id, &etags)?;
 
         self.clear_ls_cache();
+        let file_id = init.file.id.as_deref().filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow!("upload transferred but response omitted file ID; finalization cannot be confirmed"))?;
+        self.wait_uploaded_file(file_id)?;
         Ok((file_name, false))
     }
 
@@ -371,71 +373,38 @@ impl PikPak {
     }
 }
 
-/// Compute the PikPak proprietary file hash for upload deduplication.
-/// Algorithm: chunk the file, SHA1 each chunk, concatenate hex hashes, SHA1 the result.
-/// Chunk sizes follow PikPak's server-side spec (reverse-engineered from the Android client):
-///   < 128 MB  -> 256 KB chunks
-///   < 256 MB  -> 512 KB chunks
-///   < 512 MB  -> 1 MB chunks
-///   >= 512 MB -> 2 MB chunks
+/// GCID from the official web WASM: SHA1 of concatenated binary block digests.
+fn gcid_block_size(size: u64) -> usize {
+    if size <= 128 * 1024 * 1024 {
+        256 * 1024
+    } else if size <= 256 * 1024 * 1024 {
+        512 * 1024
+    } else if size <= 512 * 1024 * 1024 {
+        1024 * 1024
+    } else {
+        2 * 1024 * 1024
+    }
+}
+
 pub fn pikpak_hash(path: &Path) -> Result<String> {
     use sha1::Digest;
-
     let meta = fs::metadata(path).with_context(|| format!("cannot stat '{}'", path.display()))?;
     if !meta.is_file() {
         return Err(anyhow!("not a regular file: '{}'", path.display()));
     }
-    let file_size = meta.len();
-
-    let chunk_size: u64 = if file_size < 128 * 1024 * 1024 {
-        256 * 1024
-    } else if file_size < 256 * 1024 * 1024 {
-        512 * 1024
-    } else if file_size < 512 * 1024 * 1024 {
-        1024 * 1024
-    } else {
-        2 * 1024 * 1024
-    };
-
+    let size = meta.len();
     let mut file =
         fs::File::open(path).with_context(|| format!("cannot open '{}'", path.display()))?;
-
-    let mut all_hashes = String::new();
-    let mut remaining = file_size;
-
-    while remaining > 0 {
-        let to_read = std::cmp::min(chunk_size, remaining) as usize;
-        let mut buf = vec![0u8; to_read];
-        file.read_exact(&mut buf)?;
-
-        let mut hasher = Sha1::new();
-        hasher.update(&buf);
-        let hash = hasher.finalize();
-        for b in hash.iter() {
-            write!(all_hashes, "{:02X}", b).unwrap();
-        }
-
-        remaining -= to_read as u64;
-    }
-
-    if file_size == 0 {
-        let mut hasher = Sha1::new();
-        hasher.update(b"");
-        let hash = hasher.finalize();
-        for b in hash.iter() {
-            write!(all_hashes, "{:02X}", b).unwrap();
-        }
-    }
-
     let mut final_hasher = Sha1::new();
-    final_hasher.update(all_hashes.as_bytes());
-    let final_hash = final_hasher.finalize();
-    let mut hex = String::with_capacity(40);
-    for b in final_hash.iter() {
-        write!(hex, "{:02X}", b).unwrap();
+    let mut buf = vec![0; gcid_block_size(size)];
+    let mut remaining = size;
+    while remaining > 0 {
+        let len = (remaining.min(buf.len() as u64)) as usize;
+        file.read_exact(&mut buf[..len])?;
+        final_hasher.update(Sha1::digest(&buf[..len]));
+        remaining -= len as u64;
     }
-
-    Ok(hex)
+    Ok(format!("{:X}", final_hasher.finalize()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -561,6 +530,8 @@ pub(super) struct UploadInitResponse {
 #[derive(Debug, Deserialize)]
 pub(super) struct UploadFileInfo {
     #[serde(default)]
+    pub(super) id: Option<String>,
+    #[serde(default)]
     pub(super) phase: Option<String>,
 }
 
@@ -612,15 +583,15 @@ mod tests {
         let root = temp_dir("hash-vectors");
         let path = root.join("local file.bin");
         for (contents, expected) in [
-            (vec![], "4026E982E356B8AFF02CAA2601C6BCB17FB5C645"),
-            (b"abc".to_vec(), "DC99ED0C65114FB7A4EDEC7EC60659B4D76F995E"),
+            (vec![], "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"),
+            (b"abc".to_vec(), "0D3CED9BEC10A777AEC23CCC353A8C08A633045E"),
             (
                 vec![b'a'; 256 * 1024],
-                "647954E095570DED67E391B30B6B3F93B49AF9C5",
+                "3B1E747A295BB8EC1AC0B3A9FE89B33AD39E0560",
             ),
             (
                 vec![b'a'; 256 * 1024 + 1],
-                "1B5DDB7AB3D825462B697D447312B22DE1FA5862",
+                "72900AD936E2EEAFB58050926858627ACB744D4B",
             ),
         ] {
             fs::write(&path, contents).unwrap();
@@ -862,5 +833,53 @@ mod tests {
             format!("{err:#}").contains("captcha refresh failed"),
             "unexpected error: {err:#}"
         );
+    }
+}
+
+#[cfg(test)]
+mod gcid_parity_tests {
+    use super::*;
+
+    #[test]
+    fn gcid_matches_independent_official_wasm_fixtures() {
+        let dir = std::env::temp_dir().join(format!(
+            "pikpak-gcid-parity-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("fixture.bin");
+        // Values obtained from the official GCID WASM, not this implementation.
+        for (size, expected) in [
+            (0, "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"),
+            (1, "8AACFDE27B33A25EA9797815353FA580F744B3CB"),
+            (19, "CF0E686EBD77BC4A32FC73BE5FFD20F9C90CB3BD"),
+            (262143, "2C0647A6C3B97A4A97920F5C7921161676FC0A6A"),
+            (262144, "96C09F7EDBDED8C0081C3CA005ED0FE2A12074C6"),
+            (262145, "BEA4CDB9F63971DD6F4E5359E6C508ED23DD6C53"),
+            (1048576, "3B5A30EBED6DD19DB7C53ECFF5653AF945E54046"),
+            (3145747, "E4F281E01743ECECF2DE8F2899FB099513A58CC1"),
+        ] {
+            let data: Vec<u8> = (0..size).map(|i| ((i * 31 + 7) % 256) as u8).collect();
+            fs::write(&file, data).unwrap();
+            assert_eq!(pikpak_hash(&file).unwrap(), expected, "{size} bytes");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn gcid_thresholds_include_the_exact_boundary() {
+        for (boundary, before, after) in [
+            (128u64 << 20, 256 << 10, 512 << 10),
+            (256 << 20, 512 << 10, 1 << 20),
+            (512 << 20, 1 << 20, 2 << 20),
+        ] {
+            assert_eq!(gcid_block_size(boundary - 1), before);
+            assert_eq!(gcid_block_size(boundary), before);
+            assert_eq!(gcid_block_size(boundary + 1), after);
+        }
     }
 }
