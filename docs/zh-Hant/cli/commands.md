@@ -231,23 +231,33 @@ pikpaktui cat "/My Pack/notes.txt"
 
 ## play
 
-以外部播放器播放影片串流。不指定畫質則列出可用選項。
+以外部播放器播放影片串流，預設播放原畫。
 
 ```
-pikpaktui play <路徑> [畫質]
+pikpaktui play [選項] <路徑> [畫質]
+pikpaktui play --latest [選項] [畫質]
 ```
 
 | 參數 | 說明 |
 |------|------|
-| `畫質` | 串流畫質：`720`、`1080`、`original`，或按編號選擇 |
+| `畫質` | 選填：`original`（預設）、`1080`／`1080p` 等解析度或名稱，或從 1 開始的串流編號 |
+| `-l`、`--list-qualities` | 列出可用畫質及限制，不啟動播放器，也不需要設定播放器 |
+| `--latest` | 代替路徑，從預設 `events` 命令使用的前 20 筆事件中選擇最新加入的影片 |
+
+`--latest` 按由新到舊的順序檢查上傳、儲存／還原、建立和複製事件，略過資料夾及非影片檔案，不讀取後續事件頁；找不到影片時回報錯誤。由於無法確定雲端路徑，`{path}` 和 `PIKPAKTUI_PLAY_PATH` 為空，檔名和檔案 ID 仍可使用。
+
+原畫不存在或無法播放時回報錯誤，請明確選擇其他畫質。列出畫質和選擇畫質不能同時使用。
 
 **範例：**
 
 ```bash
-pikpaktui play "/My Pack/video.mp4"            # 列出可用串流
+pikpaktui play "/My Pack/video.mp4"            # 播放原畫
 pikpaktui play "/My Pack/video.mp4" 1080       # 播放 1080p
-pikpaktui play "/My Pack/video.mp4" original   # 播放原始檔案
 pikpaktui play "/My Pack/video.mp4" 2          # 按編號播放第 2 條串流
+pikpaktui play "/My Pack/video.mp4" -l         # 列出可用畫質
+pikpaktui play --latest                       # 播放最新加入的影片（原畫）
+pikpaktui play --latest 720p                  # 以 720p 播放該影片
+pikpaktui play --latest --list-qualities       # 列出該影片的畫質
 ```
 
 可在[播放器設定](/zh-Hant/configuration#播放器參數與包裝腳本)中設定 `player_args`，傳遞標題與包裝腳本所需的檔案資訊。

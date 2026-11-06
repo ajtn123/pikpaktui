@@ -340,14 +340,20 @@ pub fn command_help_text(cmd: &str) -> (&'static str, &'static str, String) {
             ),
         ),
         "play" => (
-            "play <path> [quality]",
+            "play [options] <path> [quality] | play --latest [quality]",
             "Play video with external player",
             format!(
                 "{B}ARGUMENTS:{R}\n\
-                 {opt}  quality          {d}Stream quality (e.g. 720, 1080, original){R}\n\
+                 {opt}  quality          {d}original (default), resolution/name (e.g. 1080p), or stream index{R}\n\
+                 \n{B}OPTIONS:{R}\n\
+                 {opt}  -l, --list-qualities  {d}List streams without launching a player{R}\n\
+                 {opt}  --latest             {d}Newest added video in the first 20 events; replaces path{R}\n\
                  \n{B}EXAMPLES:{R}\n\
                  {ex}  pikpaktui play /movie.mkv{R}\n\
-                 {ex}  pikpaktui play /movie.mkv 1080{R}\n",
+                 {ex}  pikpaktui play /movie.mkv 1080{R}\n\
+                 {ex}  pikpaktui play /movie.mkv --list-qualities{R}\n\
+                 {ex}  pikpaktui play --latest{R}\n\
+                 {ex}  pikpaktui play --latest 720p{R}\n",
                 opt = G,
                 d = D,
                 ex = D,

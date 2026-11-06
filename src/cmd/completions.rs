@@ -229,7 +229,16 @@ _pikpaktui() {
                 _pikpaktui_cloud_path
             fi
             ;;
-        cat|play)
+        play)
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -- '-l' '--list-qualities' '--latest'
+            elif (( ${words[(Ie)--latest]} )); then
+                compadd -- original 2160p 1440p 1080p 720p 480p 360p
+            else
+                _pikpaktui_cloud_path
+            fi
+            ;;
+        cat)
             _pikpaktui_cloud_path
             ;;
         starred|trash)
@@ -447,7 +456,16 @@ whoami login hash update completions help version"
                 _pikpaktui_cloud_path
             fi
             ;;
-        cat|play)
+        play)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "-l --list-qualities --latest" -- "$cur"))
+            elif [[ " ${COMP_WORDS[*]} " == *" --latest "* ]]; then
+                COMPREPLY=($(compgen -W "original 2160p 1440p 1080p 720p 480p 360p" -- "$cur"))
+            else
+                _pikpaktui_cloud_path
+            fi
+            ;;
+        cat)
             _pikpaktui_cloud_path
             ;;
         starred|trash)
@@ -574,7 +592,11 @@ complete -c pikpaktui -n "__pikpaktui_using_command completions" -a "bash zsh fi
 complete -c pikpaktui -n "__pikpaktui_using_command hash" -F
 complete -c pikpaktui -n "__pikpaktui_using_command hash" -s J -l json -d "JSON output"
 complete -c pikpaktui -n "__pikpaktui_using_command ls; and not __pikpaktui_prev_is -s --sort --depth" -a "(__pikpaktui_cloud_path)"
-complete -c pikpaktui -n "__pikpaktui_using_command mv; or __pikpaktui_using_command cp; or __pikpaktui_using_command rename; or __pikpaktui_using_command rm; or __pikpaktui_using_command mkdir; or __pikpaktui_using_command star; or __pikpaktui_using_command unstar; or __pikpaktui_using_command info; or __pikpaktui_using_command link; or __pikpaktui_using_command cat; or __pikpaktui_using_command play" -a "(__pikpaktui_cloud_path)"
+complete -c pikpaktui -n "__pikpaktui_using_command mv; or __pikpaktui_using_command cp; or __pikpaktui_using_command rename; or __pikpaktui_using_command rm; or __pikpaktui_using_command mkdir; or __pikpaktui_using_command star; or __pikpaktui_using_command unstar; or __pikpaktui_using_command info; or __pikpaktui_using_command link; or __pikpaktui_using_command cat" -a "(__pikpaktui_cloud_path)"
+complete -c pikpaktui -n "__pikpaktui_using_command play; and not __fish_seen_argument -l latest" -a "(__pikpaktui_cloud_path)"
+complete -c pikpaktui -n "__pikpaktui_using_command play; and __fish_seen_argument -l latest" -a "original 2160p 1440p 1080p 720p 480p 360p"
+complete -c pikpaktui -n "__pikpaktui_using_command play" -s l -l list-qualities -d "List available qualities"
+complete -c pikpaktui -n "__pikpaktui_using_command play" -l latest -d "Newest added video in the first 20 events"
 complete -c pikpaktui -n "__pikpaktui_using_command download; and not __pikpaktui_prev_is -o --output -t -j --jobs" -a "(__pikpaktui_cloud_path)"
 complete -c pikpaktui -n "__pikpaktui_using_command download; and __pikpaktui_prev_is -o --output -t" -F
 complete -c pikpaktui -n "__pikpaktui_using_command upload; and __pikpaktui_prev_is -t" -a "(__pikpaktui_cloud_path)"
@@ -774,12 +796,18 @@ Register-ArgumentCompleter -Native -CommandName @('pikpaktui') -ScriptBlock {
                     'unstar'   { @('-n','--dry-run') }
                     'info'     { @('-J','--json') }
                     'link'     { @('-m','--media','-c','--copy','-J','--json') }
+                    'play'     { @('-l','--list-qualities','--latest') }
                     'trash'    { @('-l','--long','-J','--json') }
                     default    { @() }
                 }
                 $opts | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
                 }
+            } elseif ($command -eq 'play' -and '--latest' -in ($elements | ForEach-Object { $_.ToString() })) {
+                @('original','2160p','1440p','1080p','720p','480p','360p') |
+                    Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+                    }
             } elseif ($command -eq 'download' -and $previous -in @('-o','--output','-t')) {
                 Get-LocalPaths $wordToComplete
             } elseif ($command -eq 'upload' -and $previous -ne '-t') {
@@ -1161,6 +1189,7 @@ COMP_WORDS=(pikpaktui share --file); COMP_CWORD=2; _pikpaktui
         }
 
         let shell_case_contracts: &[(&str, &[&str])] = &[
+            ("play", &["--list-qualities", "--latest"]),
             ("star|unstar", &["--dry-run"]),
             ("info", &["--json"]),
             ("link", &["--media", "--copy", "--json"]),
@@ -1181,6 +1210,7 @@ COMP_WORDS=(pikpaktui share --file); COMP_CWORD=2; _pikpaktui
         }
 
         let line_contracts: &[(&str, &[&str])] = &[
+            ("play", &["--list-qualities", "--latest"]),
             ("star", &["--dry-run"]),
             ("unstar", &["--dry-run"]),
             ("info", &["--json"]),

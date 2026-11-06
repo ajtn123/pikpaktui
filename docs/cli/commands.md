@@ -239,23 +239,33 @@ pikpaktui cat "/My Pack/notes.txt"
 
 ## play
 
-Stream a video file using an external player. Lists available quality options if no quality is specified.
+Stream a video file using an external player. Plays the original quality by default.
 
 ```
-pikpaktui play <path> [quality]
+pikpaktui play [options] <path> [quality]
+pikpaktui play --latest [options] [quality]
 ```
 
 | Argument | Description |
 |----------|-------------|
-| `quality` | Stream quality: `720`, `1080`, `original`, or a stream index number |
+| `quality` | Optional quality: `original` (default), a resolution/name such as `1080` or `1080p`, or a 1-based stream index |
+| `-l`, `--list-qualities` | List available streams and restrictions without launching a player; no player configuration required |
+| `--latest` | Replace `<path>` with the newest added video in the first 20 events, using the same source as the default `events` command |
+
+`--latest` checks upload, save/restore, create, and copy events in newest-first order, skipping folders and non-video files. It does not fetch later event pages. If no matching video is found, it reports an error. Its cloud path is unknown, so `{path}` and `PIKPAKTUI_PLAY_PATH` are empty; the filename and file ID remain available.
+
+An unavailable or missing original stream reports an error; choose another quality explicitly. Quality listing and quality selection cannot be combined.
 
 **Examples:**
 
 ```bash
-pikpaktui play "/My Pack/video.mp4"           # list available streams
+pikpaktui play "/My Pack/video.mp4"           # play original quality
 pikpaktui play "/My Pack/video.mp4" 1080      # play 1080p
-pikpaktui play "/My Pack/video.mp4" original  # play original file
 pikpaktui play "/My Pack/video.mp4" 2         # play stream #2 by index
+pikpaktui play "/My Pack/video.mp4" -l        # list available qualities
+pikpaktui play --latest                      # play latest added video, original quality
+pikpaktui play --latest 720p                 # play that video at 720p
+pikpaktui play --latest --list-qualities      # list that video's qualities
 ```
 
 :::callout[Player configuration]{kind="info"}

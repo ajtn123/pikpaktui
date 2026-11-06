@@ -26,8 +26,8 @@ fn entry() -> Result<()> {
         return run_tui();
     }
 
-    // Hash accepts local names such as `--help` after the option separator.
-    let help_args = if args[0] == "hash" {
+    // These commands accept names such as `--help` after the option separator.
+    let help_args = if matches!(args[0].as_str(), "hash" | "play") {
         args[1..]
             .split(|arg| arg == "--")
             .next()

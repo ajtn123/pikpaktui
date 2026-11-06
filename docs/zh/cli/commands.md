@@ -233,23 +233,33 @@ pikpaktui cat "/My Pack/notes.txt"
 
 ## play
 
-用外部播放器播放视频流。不指定画质则列出可用选项。
+用外部播放器播放视频流，默认播放原画。
 
 ```
-pikpaktui play <路径> [画质]
+pikpaktui play [选项] <路径> [画质]
+pikpaktui play --latest [选项] [画质]
 ```
 
 | 参数 | 说明 |
 |------|------|
-| `画质` | 流画质：`720`、`1080`、`original`，或按编号选择 |
+| `画质` | 可选：`original`（默认）、`1080`／`1080p` 等分辨率或名称，或从 1 开始的流编号 |
+| `-l`、`--list-qualities` | 列出可用画质及限制，不启动播放器，也不需要配置播放器 |
+| `--latest` | 代替路径，从默认 `events` 命令使用的前 20 条事件中选择最新添加的视频 |
+
+`--latest` 按从新到旧的顺序检查上传、保存／恢复、创建和复制事件，跳过文件夹及非视频文件，不读取后续事件页；找不到视频时返回错误。由于无法确定云端路径，`{path}` 和 `PIKPAKTUI_PLAY_PATH` 为空，文件名和文件 ID 仍可使用。
+
+原画不存在或不可用时返回错误，请明确选择其他画质。列出画质和选择画质不能同时使用。
 
 **示例：**
 
 ```bash
-pikpaktui play "/My Pack/video.mp4"            # 列出可用流
+pikpaktui play "/My Pack/video.mp4"            # 播放原画
 pikpaktui play "/My Pack/video.mp4" 1080       # 播放 1080p
-pikpaktui play "/My Pack/video.mp4" original   # 播放原始文件
 pikpaktui play "/My Pack/video.mp4" 2          # 按编号播放第 2 条流
+pikpaktui play "/My Pack/video.mp4" -l         # 列出可用画质
+pikpaktui play --latest                       # 播放最新添加的视频（原画）
+pikpaktui play --latest 720p                  # 以 720p 播放该视频
+pikpaktui play --latest --list-qualities       # 列出该视频的画质
 ```
 
 :::callout[播放器配置]{kind="info"}

@@ -1,13 +1,15 @@
 use anyhow::Result;
 use unicode_width::UnicodeWidthStr;
 
+pub(super) const DEFAULT_LIMIT: u32 = 20;
+
 pub fn run(args: &[String]) -> Result<()> {
     let client = super::cli_client()?;
     let config = super::cli_config();
     let nerd_font = config.cli_nerd_font;
 
     let mut json = false;
-    let mut limit = 20u32;
+    let mut limit = DEFAULT_LIMIT;
 
     for arg in args {
         match arg.as_str() {

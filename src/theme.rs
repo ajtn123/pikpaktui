@@ -19,12 +19,11 @@ pub fn categorize(entry: &Entry) -> FileCategory {
         return FileCategory::Folder;
     }
 
-    let ext = entry
-        .name
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    categorize_name(&entry.name)
+}
+
+pub fn categorize_name(name: &str) -> FileCategory {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
 
     match ext.as_str() {
         "zip" | "tar" | "gz" | "bz2" | "xz" | "rar" | "7z" | "zst" | "lz4" | "tgz" => {
