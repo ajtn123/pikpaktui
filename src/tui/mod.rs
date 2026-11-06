@@ -293,8 +293,12 @@ enum OpResult {
     PreviewText(AsyncRequest, Result<PreparedTextPreview>),
     PreviewThumbnail(AsyncRequest, Result<PreparedThumbnail>),
     OfflineTasks(AsyncRequest, Result<crate::pikpak::OfflineListResponse>),
-    PlayInfo(AsyncRequest, Result<FileInfoResponse>),
-    PlayPickerInfo(AsyncRequest, Result<(FileInfoResponse, Vec<PlayOption>)>),
+    PlayInfo(AsyncRequest, Result<FileInfoResponse>, Vec<String>),
+    PlayPickerInfo(
+        AsyncRequest,
+        Result<(FileInfoResponse, Vec<PlayOption>)>,
+        Vec<String>,
+    ),
     TrashList(AsyncRequest, Result<Vec<Entry>>),
     TrashOp(AsyncRequest, Result<String>),
     OfflineOp(AsyncRequest, Result<String>),
@@ -1181,7 +1185,7 @@ impl App {
                 OpResult::OfflineTasks(request, result) => {
                     self.apply_offline_tasks(request, result)
                 }
-                OpResult::PlayInfo(request, Ok(info)) => {
+                OpResult::PlayInfo(request, Ok(info), subtitle_urls) => {
                     if !self.modal_request_matches(&request)
                         || !matches!(self.input, InputMode::Normal)
                     {
@@ -1195,20 +1199,23 @@ impl App {
                             "No playback streams available; refresh file details to retry".into(),
                         );
                     } else {
+                        let mut context = request.playback_context.unwrap_or(PlayContext {
+                            name: info.name,
+                            path: String::new(),
+                            id: request.target,
+                            subtitle_urls: Vec::new(),
+                        });
+                        context.subtitle_urls = subtitle_urls;
                         self.input = InputMode::ConfirmPlay {
                             dialog: playback::PlaybackDialog::new(
-                                request.playback_context.unwrap_or(PlayContext {
-                                    name: info.name,
-                                    path: String::new(),
-                                    id: request.target,
-                                }),
+                                context,
                                 medias,
                                 self.config.playback_quality,
                             ),
                         };
                     }
                 }
-                OpResult::PlayInfo(request, Err(e)) => {
+                OpResult::PlayInfo(request, Err(e), _) => {
                     if !self.modal_request_matches(&request)
                         || !matches!(self.input, InputMode::Normal)
                     {
@@ -1218,7 +1225,7 @@ impl App {
                     self.finish_loading();
                     self.push_log(format!("Play info failed: {e:#}"));
                 }
-                OpResult::PlayPickerInfo(request, Ok((info, medias))) => {
+                OpResult::PlayPickerInfo(request, Ok((info, medias)), subtitle_urls) => {
                     if !self.modal_request_matches(&request)
                         || !matches!(self.input, InputMode::Normal)
                     {
@@ -1234,22 +1241,22 @@ impl App {
                             self.config.playback_quality.height(),
                         )
                         .unwrap_or(0);
+                        let mut context = request.playback_context.unwrap_or(PlayContext {
+                            name: info.name,
+                            path: String::new(),
+                            id: request.target,
+                            subtitle_urls: Vec::new(),
+                        });
+                        context.subtitle_urls = subtitle_urls;
                         self.input = InputMode::PlayPicker {
-                            name: request
-                                .playback_context
-                                .as_ref()
-                                .map_or_else(|| info.name.clone(), |c| c.name.clone()),
-                            context: request.playback_context.unwrap_or(PlayContext {
-                                name: info.name,
-                                path: String::new(),
-                                id: request.target,
-                            }),
+                            name: context.name.clone(),
+                            context,
                             medias,
                             selected: first_avail,
                         };
                     }
                 }
-                OpResult::PlayPickerInfo(request, Err(e)) => {
+                OpResult::PlayPickerInfo(request, Err(e), _) => {
                     if !self.modal_request_matches(&request)
                         || !matches!(self.input, InputMode::Normal)
                     {
@@ -2316,6 +2323,7 @@ mod folder_listing_result_tests {
             .send(OpResult::PlayInfo(
                 request(1, AsyncRequestKind::Play, "old-target"),
                 Ok(info("old-target", "old")),
+                Vec::new(),
             ))
             .unwrap();
 
@@ -3276,7 +3284,7 @@ mod offline_refresh_tests {
         let info: FileInfoResponse = serde_json::from_str(r#"{"id":"file","name":"fixture","web_content_link":"https://slow.invalid/download","medias":[{"is_origin":true,"is_visible":true,"link":{"url":"https://media.invalid/original"}}]}"#).unwrap();
         let request = app.begin_modal_request(AsyncRequestKind::Play, "file");
         app.result_tx
-            .send(OpResult::PlayInfo(request, Ok(info)))
+            .send(OpResult::PlayInfo(request, Ok(info), Vec::new()))
             .unwrap();
         app.poll_results();
         assert!(

@@ -78,10 +78,19 @@ Both CLI and TUI use the same player configuration:
 
 ```toml
 player = "mpv"
-player_args = ["--force-media-title={name}"]
+player_args = [
+  "--force-media-title={name}",
+  "--sub-file={subtitle_urls}",
+]
 ```
 
-Each `player_args` element is one argument, including any spaces or quotes in the inserted value. `{name}`, `{path}`, and `{id}` expand to the original cloud filename, cloud file path, and file ID. Expansion happens once; unknown placeholders remain literal. The video URL is appended after `--`. No shell is invoked.
+`{name}`, `{path}`, and `{id}` expand to the original cloud filename, cloud file path, and file ID. Each scalar argument preserves spaces and quotes in the inserted value. Expansion happens once; unknown placeholders remain literal. The video URL is appended after `--`. No shell is invoked.
+
+`{subtitle_urls}` is a list placeholder: its entire argument is repeated once per subtitle URL, or omitted when the list is empty. The example above produces separate `--sub-file=<url>` arguments for mpv. Inserted URLs remain literal, even if they contain spaces, commas, or placeholder text.
+
+For `video.mp4`, matching sibling files include `video.ass` and `video.zh.ass`. The subtitle stem must equal the full video stem or start with that stem followed by a dot and a nonempty suffix; `video2.ass` does not match. Stems are case-sensitive; supported extensions (`ass`, `ssa`, `srt`, `vtt`, `sub`, `ttml`, `smi`, `sami`) are case-insensitive. Exact-stem matches come first, followed by suffixed matches sorted by filename. Folders are excluded and subdirectories are not searched.
+
+Candidates come from the CLI's already cached parent listing or the TUI's current directory entries, with no extra directory-list requests. Only arguments containing `{subtitle_urls}` trigger file-detail requests for matching subtitles; listing qualities does not. URL lookup has a five-second total budget and skips failed or unavailable links so video playback can continue. Subtitle contents are fetched by the player. `--latest` and views without a same-directory snapshot supply an empty list.
 
 A wrapper also receives `PIKPAKTUI_PLAY_NAME`, `PIKPAKTUI_PLAY_PATH`, and `PIKPAKTUI_PLAY_ID` in its child environment. The path is empty when a reliable cloud path is unavailable (for example, some special views); use the file ID in that case. A wrapper can set the title like this:
 
@@ -90,7 +99,7 @@ A wrapper also receives `PIKPAKTUI_PLAY_NAME`, `PIKPAKTUI_PLAY_PATH`, and `PIKPA
 exec mpv --force-media-title="$PIKPAKTUI_PLAY_NAME" "$@"
 ```
 
-Set `player` to the wrapper executable. Its arguments already include `--` and the video URL. The legacy `player` string still splits on whitespace; use a wrapper name on `PATH` or a path without spaces, and put extra arguments in `player_args`. Subtitle selection can be implemented in the wrapper; pikpaktui does not automatically match or download subtitles.
+Set `player` to the wrapper executable. Its arguments already include `--` and the video URL. The legacy `player` string still splits on whitespace; use a wrapper name on `PATH` or a path without spaces, and put extra arguments in `player_args`. Wrappers can implement additional subtitle selection.
 
 
 ### update_check

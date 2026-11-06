@@ -79,10 +79,19 @@ CLI 和 TUI 使用相同的播放器配置：
 
 ```toml
 player = "mpv"
-player_args = ["--force-media-title={name}"]
+player_args = [
+  "--force-media-title={name}",
+  "--sub-file={subtitle_urls}",
+]
 ```
 
-`player_args` 的每个元素都是一个独立参数，即使替换值包含空格或引号。`{name}`、`{path}`、`{id}` 分别替换为原始云端文件名、云端文件路径和文件 ID，只替换一次，未知占位符保留原样。视频 URL 追加在 `--` 后，不调用 shell 执行命令。
+`{name}`、`{path}`、`{id}` 分别替换为原始云端文件名、云端文件路径和文件 ID。标量参数中的空格和引号保留原样，只替换一次，未知占位符不变。视频 URL 追加在 `--` 后，不调用 shell 执行命令。
+
+`{subtitle_urls}` 是列表占位符：包含它的整个参数按每个字幕 URL 重复一次；列表为空时省略该参数。以上配置会生成多个独立的 `--sub-file=<url>` 参数。插入的 URL 保留原样，即使含有空格、逗号或占位符文本。
+
+播放 `video.mp4` 时，会匹配同目录的 `video.ass`、`video.zh.ass` 等文件。字幕主名必须与完整视频主名相同，或在其后加点号和非空后缀；`video2.ass` 不匹配。主名区分大小写，扩展名不区分大小写，支持 `ass`、`ssa`、`srt`、`vtt`、`sub`、`ttml`、`smi`、`sami`。完全同名的字幕优先，其余按文件名排序；跳过文件夹，不搜索子目录。
+
+候选文件复用 CLI 已缓存的父目录列表或 TUI 当前目录列表，不额外请求目录列表。仅在参数包含 `{subtitle_urls}` 时才请求匹配字幕的文件详情；列出画质时不查询字幕。URL 查询总预算为五秒，失败或不可用的链接会跳过，视频仍可播放；字幕内容由播放器获取。`--latest` 和没有同目录快照的视图传入空列表。
 
 包装脚本还会收到子进程环境变量 `PIKPAKTUI_PLAY_NAME`、`PIKPAKTUI_PLAY_PATH`、`PIKPAKTUI_PLAY_ID`。无法可靠确定云端路径时（例如部分特殊视图），路径为空，此时使用文件 ID。设置标题的脚本示例：
 
@@ -91,7 +100,7 @@ player_args = ["--force-media-title={name}"]
 exec mpv --force-media-title="$PIKPAKTUI_PLAY_NAME" "$@"
 ```
 
-将 `player` 设置为脚本可执行文件。传入参数已包含 `--` 和视频 URL。原有 `player` 字符串仍按空白拆分；请使用 `PATH` 中的脚本名称或不含空格的可执行路径，将额外参数放入 `player_args`。字幕选择可由脚本实现；pikpaktui 不自动匹配或下载字幕。
+将 `player` 设置为脚本可执行文件。传入参数已包含 `--` 和视频 URL。原有 `player` 字符串仍按空白拆分；请使用 `PATH` 中的脚本名称或不含空格的可执行路径，将额外参数放入 `player_args`。包装脚本也可实现其他字幕选择逻辑。
 
 
 ### 缩略图设置

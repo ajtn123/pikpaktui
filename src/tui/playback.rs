@@ -3,7 +3,7 @@ use crossterm::event::KeyCode;
 use crate::config::PlaybackQuality;
 use crate::player::{self, PlayContext};
 
-use super::{App, InputMode, PlayOption};
+use super::{App, AsyncRequestKind, InputMode, OpResult, PlayOption};
 
 #[derive(Debug, Clone)]
 pub(super) struct PlaybackDialog {
@@ -67,6 +67,50 @@ pub(super) fn move_selection(medias: &[PlayOption], selected: usize, up: bool) -
 }
 
 impl App {
+    pub(super) fn playback_subtitle_ids(&self, id: &str) -> Vec<String> {
+        if !matches!(self.input, InputMode::Normal)
+            || !player::needs_subtitles(&self.config.player_args)
+        {
+            return Vec::new();
+        }
+        self.current_entry()
+            .filter(|entry| entry.id == id)
+            .map(|entry| player::matching_subtitle_ids(&entry.name, &self.entries))
+            .unwrap_or_default()
+    }
+
+    pub(super) fn start_playback_request(&mut self, kind: AsyncRequestKind, id: String) {
+        self.loading = true;
+        let subtitle_ids = self.playback_subtitle_ids(&id);
+        let request = self.begin_modal_request(kind, id.clone());
+        let client = std::sync::Arc::clone(&self.client);
+        let tx = self.result_tx.clone();
+        std::thread::spawn(move || {
+            let result = client.file_info(&id);
+            let subtitle_urls = if result
+                .as_ref()
+                .is_ok_and(|info| info.play_options().iter().any(|option| option.available))
+            {
+                player::resolve_subtitle_urls(&client, &subtitle_ids)
+            } else {
+                Vec::new()
+            };
+            let result = if kind == AsyncRequestKind::Play {
+                OpResult::PlayInfo(request, result, subtitle_urls)
+            } else {
+                OpResult::PlayPickerInfo(
+                    request,
+                    result.map(|info| {
+                        let options = info.play_options();
+                        (info, options)
+                    }),
+                    subtitle_urls,
+                )
+            };
+            let _ = tx.send(result);
+        });
+    }
+
     /// Snapshot only a main-pane cloud entry; synthetic views have no known path.
     pub(super) fn playback_context(&self, id: &str) -> Option<PlayContext> {
         let entry = self.current_entry().filter(|entry| entry.id == id)?;
@@ -86,6 +130,7 @@ impl App {
                 String::new()
             },
             id: entry.id.clone(),
+            subtitle_urls: Vec::new(),
         })
     }
 
@@ -239,6 +284,7 @@ mod tests {
                     name: "sample-video.mp4".into(),
                     path: "/sample-video.mp4".into(),
                     id: "sample".into(),
+                    subtitle_urls: Vec::new(),
                 },
                 options(),
                 PlaybackQuality::Original,
@@ -265,6 +311,40 @@ mod tests {
             panic!("confirmation closed")
         };
         dialog
+    }
+
+    #[test]
+    fn subtitles_are_selected_only_from_the_current_directory_when_requested() {
+        let mut app = app();
+        app.input = InputMode::Normal;
+        let mut video = super::super::Entry {
+            id: "video".into(),
+            name: "video.mp4".into(),
+            kind: super::super::EntryKind::File,
+            size: 0,
+            created_time: String::new(),
+            modified_time: String::new(),
+            starred: false,
+            thumbnail_link: None,
+            phase: None,
+            audit: None,
+        };
+        app.entries = vec![video.clone()];
+        video.id = "ass".into();
+        video.name = "video.ass".into();
+        app.entries.push(video.clone());
+        video.id = "zh".into();
+        video.name = "video.zh.ass".into();
+        app.entries.push(video.clone());
+        video.id = "other".into();
+        video.name = "other.ass".into();
+        app.entries.push(video);
+        assert!(app.playback_subtitle_ids("video").is_empty());
+        app.config.player_args = vec!["--sub-file={subtitle_urls}".into()];
+        assert_eq!(app.playback_subtitle_ids("video"), vec!["ass", "zh"]);
+        assert!(app.playback_subtitle_ids("other-selection").is_empty());
+        app.input = InputMode::InfoLoading;
+        assert!(app.playback_subtitle_ids("video").is_empty());
     }
 
     // Catches reading a later selection / API rename instead of the requested file.
@@ -295,7 +375,11 @@ mod tests {
         }))
         .unwrap();
         app.result_tx
-            .send(super::super::OpResult::PlayInfo(request, Ok(info)))
+            .send(super::super::OpResult::PlayInfo(
+                request,
+                Ok(info),
+                Vec::new(),
+            ))
             .unwrap();
         app.poll_results();
         assert_eq!(dialog(&app).name, "--original 'film' {path}.mkv");
@@ -330,11 +414,19 @@ mod tests {
                 "name":"renamed.mkv", "web_content_link":"https://example.invalid/video"
             }))
             .unwrap();
+            let subtitle_urls = vec![
+                "https://example.invalid/original.ass".to_owned(),
+                "https://example.invalid/original.zh.ass".to_owned(),
+            ];
             let result = if kind == super::super::AsyncRequestKind::Play {
-                super::super::OpResult::PlayInfo(request, Ok(info))
+                super::super::OpResult::PlayInfo(request, Ok(info), subtitle_urls.clone())
             } else {
                 let options = info.play_options();
-                super::super::OpResult::PlayPickerInfo(request, Ok((info, options)))
+                super::super::OpResult::PlayPickerInfo(
+                    request,
+                    Ok((info, options)),
+                    subtitle_urls.clone(),
+                )
             };
             app.result_tx.send(result).unwrap();
             app.poll_results();
@@ -354,9 +446,15 @@ mod tests {
             assert_eq!(context.name, "--original 'film' {path}.mkv");
             assert_eq!(context.path, "/TV Shows/--original 'film' {path}.mkv");
             assert_eq!(context.id, "original-id");
+            assert_eq!(context.subtitle_urls, subtitle_urls);
             assert_eq!(pending_url, "https://example.invalid/video");
             app.config.player = Some("wrapper --legacy".into());
-            app.config.player_args = vec!["--title={name}".into(), "{path}".into(), "{id}".into()];
+            app.config.player_args = vec![
+                "--title={name}".into(),
+                "{path}".into(),
+                "{id}".into(),
+                "--sub-file={subtitle_urls}".into(),
+            ];
             let cli = crate::cmd::play::player_command(&app.config, pending_url, context).unwrap();
             let tui = app
                 .player_command("wrapper --legacy", pending_url, context)
@@ -370,6 +468,8 @@ mod tests {
                         "--title=--original 'film' {path}.mkv",
                         "/TV Shows/--original 'film' {path}.mkv",
                         "original-id",
+                        "--sub-file=https://example.invalid/original.ass",
+                        "--sub-file=https://example.invalid/original.zh.ass",
                         "--",
                         "https://example.invalid/video",
                     ]
@@ -572,7 +672,11 @@ mod tests {
         app.input = InputMode::Normal;
         let request = app.begin_modal_request(super::super::AsyncRequestKind::Play, "fixture");
         app.result_tx
-            .send(super::super::OpResult::PlayInfo(request, Ok(info.clone())))
+            .send(super::super::OpResult::PlayInfo(
+                request,
+                Ok(info.clone()),
+                Vec::new(),
+            ))
             .unwrap();
         app.poll_results();
         assert_eq!(dialog(&app).selected, 1);
@@ -591,6 +695,7 @@ mod tests {
             .send(super::super::OpResult::PlayPickerInfo(
                 request,
                 Ok((info, options)),
+                Vec::new(),
             ))
             .unwrap();
         app.poll_results();

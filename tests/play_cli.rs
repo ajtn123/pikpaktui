@@ -31,6 +31,22 @@ fn file_info() -> Value {
 
 impl Fixture {
     fn new(info: Value, events: Value, player: bool) -> Self {
+        Self::with_subtitles(
+            info,
+            events,
+            player,
+            json!({"files":[{"id":"file-id","name":"film.mkv","kind":"drive#file"}]}),
+            json!({}),
+        )
+    }
+
+    fn with_subtitles(
+        info: Value,
+        events: Value,
+        player: bool,
+        listing: Value,
+        subtitles: Value,
+    ) -> Self {
         static NEXT_ROOT: AtomicUsize = AtomicUsize::new(0);
         let root = loop {
             let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
@@ -104,10 +120,9 @@ impl Fixture {
                     .unwrap();
                 let body = match url.path() {
                     "/drive/v1/events" => events.clone(),
-                    "/drive/v1/files" => {
-                        json!({"files":[{"id":"file-id","name":"film.mkv","kind":"drive#file"}]})
-                    }
+                    "/drive/v1/files" => listing.clone(),
                     "/drive/v1/files/file-id" | "/drive/v1/files/latest-id" => info.clone(),
+                    path if subtitles.get(path).is_some() => subtitles[path].clone(),
                     path => panic!("unexpected API request: {path}"),
                 }
                 .to_string();
@@ -122,6 +137,18 @@ impl Fixture {
             stop,
             handle: Some(handle),
         }
+    }
+
+    fn set_player_args(&self, args: &[&str]) {
+        let path = self.root.join("config.toml");
+        let mut settings: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        settings["player_args"] = toml::Value::Array(
+            args.iter()
+                .map(|arg| toml::Value::String((*arg).into()))
+                .collect(),
+        );
+        std::fs::write(path, toml::to_string(&settings).unwrap()).unwrap();
     }
 
     fn run(&self, args: &[&str]) -> Output {
@@ -219,12 +246,19 @@ fn latest_searches_only_the_events_first_page_and_preserves_file_context() {
         ]}),
         true,
     );
+    fixture.set_player_args(&[
+        "--force-media-title={name}",
+        "--cloud-path={path}",
+        "--cloud-id={id}",
+        "--sub-file={subtitle_urls}",
+    ]);
     for (args, url) in [
         (vec!["--latest"], "https://example.invalid/original"),
         (vec!["--latest", "720p"], "https://example.invalid/720"),
     ] {
         let output = fixture.success(&args);
         assert!(output.contains(url), "{output}");
+        assert!(!output.contains("--sub-file="), "{output}");
         assert!(output.contains("--force-media-title=film.mkv"), "{output}");
         assert!(
             output.contains("--cloud-path= --cloud-id=latest-id"),
@@ -318,4 +352,157 @@ fn help_and_invalid_arguments_do_not_access_the_api() {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("no player configured"));
     }
     assert!(fixture.requests.lock().unwrap().is_empty());
+}
+
+fn subtitle_listing() -> Value {
+    json!({"files":[
+        {"id":"file-id", "name":"film.mkv", "kind":"drive#file"},
+        {"id":"zh", "name":"film.zh.ass", "kind":"drive#file"},
+        {"id":"ass", "name":"film.ass", "kind":"drive#file"},
+        {"id":"ass", "name":"film.ass", "kind":"drive#file"},
+        {"id":"other", "name":"film2.ass", "kind":"drive#file"},
+        {"id":"text", "name":"film.zh.txt", "kind":"drive#file"},
+        {"id":"folder", "name":"film.en.ass", "kind":"drive#folder"}
+    ]})
+}
+
+#[test]
+fn subtitle_urls_reuse_the_directory_listing_and_resolve_only_matching_files() {
+    let fixture = Fixture::with_subtitles(
+        file_info(),
+        json!({"events":[]}),
+        true,
+        subtitle_listing(),
+        json!({
+            "/drive/v1/files/ass": {"name":"film.ass", "web_content_link":"https://example.invalid/sub-ass"},
+            "/drive/v1/files/zh": {"name":"film.zh.ass", "links":{"application/octet-stream":{"url":"https://example.invalid/sub-zh"}}}
+        }),
+    );
+    fixture.set_player_args(&["--title={name}", "--sub-file={subtitle_urls}"]);
+    let output = fixture.success(&["/film.mkv"]);
+    assert!(output.contains("--title=film.mkv"), "{output}");
+    assert!(
+        output.contains(
+            "--sub-file=https://example.invalid/sub-ass --sub-file=https://example.invalid/sub-zh"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains("-- https://example.invalid/original"),
+        "{output}"
+    );
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(
+        requests.iter().map(|url| url.path()).collect::<Vec<_>>(),
+        vec![
+            "/drive/v1/files",
+            "/drive/v1/files/file-id",
+            "/drive/v1/files/ass",
+            "/drive/v1/files/zh",
+        ]
+    );
+}
+
+#[test]
+fn subtitle_lookup_is_opt_in_and_is_skipped_when_listing_qualities() {
+    let fixture = Fixture::with_subtitles(
+        file_info(),
+        json!({"events":[]}),
+        true,
+        subtitle_listing(),
+        json!({}),
+    );
+    assert!(
+        fixture
+            .success(&["/film.mkv"])
+            .contains("https://example.invalid/original")
+    );
+    fixture.set_player_args(&["--sub-file={subtitle_urls}"]);
+    assert!(
+        fixture
+            .success(&["/film.mkv", "-l"])
+            .contains("Available qualities")
+    );
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(
+        requests.iter().map(|url| url.path()).collect::<Vec<_>>(),
+        vec![
+            "/drive/v1/files",
+            "/drive/v1/files/file-id",
+            "/drive/v1/files",
+            "/drive/v1/files/file-id",
+        ]
+    );
+}
+
+#[test]
+fn absent_or_unavailable_subtitles_do_not_prevent_playback_or_emit_empty_arguments() {
+    for (listing, subtitles) in [
+        (
+            json!({"files":[{"id":"file-id","name":"film.mkv","kind":"drive#file"}]}),
+            json!({}),
+        ),
+        (
+            subtitle_listing(),
+            json!({
+                "/drive/v1/files/ass": {"error":"not_found"},
+                "/drive/v1/files/zh": {"name":"film.zh.ass", "web_content_link":""}
+            }),
+        ),
+    ] {
+        let fixture =
+            Fixture::with_subtitles(file_info(), json!({"events":[]}), true, listing, subtitles);
+        fixture.set_player_args(&["--sub-file={subtitle_urls}"]);
+        let output = fixture.success(&["/film.mkv"]);
+        assert!(!output.contains("--sub-file="), "{output}");
+        assert!(
+            output.contains("-- https://example.invalid/original"),
+            "{output}"
+        );
+        assert_eq!(
+            fixture
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|url| url.path() == "/drive/v1/files")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn subtitle_lookup_continues_after_a_failed_candidate_and_deduplicates_urls() {
+    let mut listing = subtitle_listing();
+    listing["files"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"en", "name":"film.en.srt", "kind":"drive#file"}));
+    for ass in [
+        json!({"error":"unavailable"}),
+        json!({"name":"film.ass", "web_content_link":"https://example.invalid/sub"}),
+    ] {
+        let fixture = Fixture::with_subtitles(
+            file_info(),
+            json!({"events":[]}),
+            true,
+            listing.clone(),
+            json!({
+                "/drive/v1/files/ass": ass,
+                "/drive/v1/files/en": {"name":"film.en.srt", "web_content_link":"https://example.invalid/sub"},
+                "/drive/v1/files/zh": {"name":"film.zh.ass", "web_content_link":"https://example.invalid/sub"}
+            }),
+        );
+        fixture.set_player_args(&["--sub-file={subtitle_urls}"]);
+        let output = fixture.success(&["/film.mkv"]);
+        assert_eq!(
+            output
+                .matches("--sub-file=https://example.invalid/sub")
+                .count(),
+            1,
+            "{output}"
+        );
+        assert_eq!(fixture.requests.lock().unwrap().len(), 5);
+    }
 }

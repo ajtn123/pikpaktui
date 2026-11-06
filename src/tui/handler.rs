@@ -735,14 +735,7 @@ impl App {
                     } else if entry.kind == EntryKind::File
                         && theme::categorize(&entry) == theme::FileCategory::Video
                     {
-                        self.loading = true;
-                        let client = Arc::clone(&self.client);
-                        let tx = self.result_tx.clone();
-                        let eid = entry.id.clone();
-                        let request = self.begin_modal_request(AsyncRequestKind::Play, eid.clone());
-                        std::thread::spawn(move || {
-                            let _ = tx.send(OpResult::PlayInfo(request, client.file_info(&eid)));
-                        });
+                        self.start_playback_request(AsyncRequestKind::Play, entry.id);
                     }
                 }
             }
@@ -891,22 +884,7 @@ impl App {
                     && entry.kind == EntryKind::File
                     && theme::categorize(&entry) == theme::FileCategory::Video
                 {
-                    self.loading = true;
-                    let client = Arc::clone(&self.client);
-                    let tx = self.result_tx.clone();
-                    let eid = entry.id.clone();
-                    let request =
-                        self.begin_modal_request(AsyncRequestKind::PlayPicker, eid.clone());
-                    std::thread::spawn(move || {
-                        let result = client.file_info(&eid);
-                        let _ = tx.send(match result {
-                            Ok(info) => {
-                                let options = info.play_options();
-                                OpResult::PlayPickerInfo(request, Ok((info, options)))
-                            }
-                            Err(e) => OpResult::PlayPickerInfo(request, Err(e)),
-                        });
-                    });
+                    self.start_playback_request(AsyncRequestKind::PlayPicker, entry.id);
                 }
             }
             KeyCode::Char('p') => {

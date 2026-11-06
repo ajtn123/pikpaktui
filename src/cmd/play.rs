@@ -77,11 +77,17 @@ pub fn run(args: &[String]) -> Result<()> {
         ));
     }
     let client = super::cli_client()?;
+    let mut subtitle_ids = Vec::new();
     let mut context = match &args.target {
         Target::Path(path) => {
             let (parent_path, name) = super::split_parent_name(path)?;
             let parent_id = client.resolve_path(&parent_path)?;
             let entry = super::find_entry(&client, &parent_id, &name)?;
+            if !args.list_qualities && player::needs_subtitles(&config.player_args) {
+                // find_entry has already populated this parent folder's cache.
+                subtitle_ids =
+                    player::matching_subtitle_ids(&entry.name, &client.ls_cached(&parent_id)?);
+            }
             playback_context(&parent_path, &entry.name, &entry.id)
         }
         Target::Latest => latest_video_context(&client.events(super::events::DEFAULT_LIMIT)?)?,
@@ -109,6 +115,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
 
     let option = select_quality(&options, args.quality.as_deref().unwrap_or("original"))?;
+    context.subtitle_urls = player::resolve_subtitle_urls(&client, &subtitle_ids);
     launch_player(&config, &option.url, &option.label, &context)
 }
 
@@ -223,6 +230,7 @@ fn latest_video_context(response: &EventsResponse) -> Result<PlayContext> {
                     name: name.into(),
                     path: String::new(),
                     id: id.into(),
+                    subtitle_urls: Vec::new(),
                 }
             })
         })
@@ -245,6 +253,7 @@ fn playback_context(parent_path: &str, name: &str, id: &str) -> PlayContext {
         name: name.into(),
         path: format!("/{}", components.join("/")),
         id: id.into(),
+        subtitle_urls: Vec::new(),
     }
 }
 
@@ -403,6 +412,7 @@ mod tests {
                 id: "file-id".into(),
                 name: "actual name".into(),
                 path: String::new(),
+                subtitle_urls: Vec::new(),
             }
         );
     }
